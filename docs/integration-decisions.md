@@ -46,12 +46,18 @@ Owner: Developer A. Every claim here comes from official docs or the installed S
 - Coordinator address (local seed from `.env`): `agent1qfnlwm4d4tm9pwczcmc4d3y76qr2df3kq732tyelpq00fklmrn7h2f3qqz0`
 - `tests/integration/test_fetch_coordinator_chat.py`: Bureau round-trip — ChatMessage → ChatAcknowledgement + DEMO-labeled reply. Passing.
 
-## Reconciliation with Developer B's as-built API (2026-10-17)
+## Integration with Developer B's backend (Step 3, 2026-10-17)
 
-B's notes (`dev-b-notes.md`) define the real HTTP API; it supersedes §3 of `docs/interface-contract.md` where they differ. Key differences A adapts to:
-- Auth header `X-Demo-Token` (not Bearer). Env `DOORSTEP_DEMO_TOKEN`.
-- `find_transport` = `POST /transport/find {case_id}`; B's backend evaluates its seeded provider inventory and returns offers with `eligible` + `reasons`.
-- `propose_assignment` = `POST /assignments/propose {case_id, offer_id}`; `accept_assignment` = `POST /assignments/{id}/respond {provider_id, accept}`.
-- `GET /cases/{id}` returns `summary_text` — use it as the ASI:One plain-text status.
+B's merged API (PR #1, commit 7244c28) implements `docs/interface-contract.md` v1.0 §3 as written: Bearer `DEMO_AUTH_TOKEN`, `X-Correlation-ID`, `/cases/{id}/transport|destination/evaluate` taking raw offers, 409 for business-rule refusals. (An earlier draft of B's notes used different routes; that is superseded.)
 
-**How provider agents stay genuine:** Transport/Destination agents keep their own inventory JSON and answer `OfferRequest` over Fetch.ai (they may reuse B's pure `doorstep.services.matching` functions). Coordinator then calls B's `/transport/find` for the authoritative, re-checked offer IDs, proposes, sends `AcceptRequest` to the matching provider agent over Fetch.ai, and forwards the agent's decision to `/assignments/{id}/respond`. The provider's decision comes from the agent; B's backend stays the source of truth for state.
+Flow implemented (`agents/coordinator_actions.py`, `workflows/backend_client.py`):
+1. `GET /cases/{id}` → needs, consent, `needs_confirmed`, `zone_rule`. 404 means no case yet (cases are created only by a verified simulated warning).
+2. If needs are unconfirmed or consent is missing, no provider is contacted.
+3. Consent-scoped requirements → `OfferRequest` to Transport and Destination agents over Fetch.ai (`send_and_receive`, concurrent).
+4. Agents return contract-shaped raw offers (own inventory; approval is not self-declared).
+5. Raw offers → B's `/evaluate`; B's registry + deterministic matching decide eligibility and reasons.
+6. Reply built from B's result; "Nothing is assigned yet" until a provider accepts.
+
+Live evidence: via Agentverse mailboxes, after "Start the simulated Zone 3 readiness check" and Maria's simulated SMS reply + confirmation, "Show available suitable providers for Maria" returned eligible `transport_org_a` (#1), `transport_org_e` (#2), `destination_org_a`; rejected `transport_org_b` (NOT_WHEELCHAIR_ACCESSIBLE, NO_TRANSFER_ASSISTANCE), `transport_org_c` (PROVIDER_NOT_APPROVED), `transport_org_d` (PETS_NOT_ALLOWED), `destination_org_b` (NOT_STEP_FREE), `destination_org_c` (PETS_NOT_ALLOWED) — identical to B's expected results.
+
+No in-memory FakeBackend: B's real app runs in-process for tests (`httpx.ASGITransport`, in-memory SQLite), which is stricter than a fake.

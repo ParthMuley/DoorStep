@@ -8,10 +8,12 @@ import pytest
 from uagents import Context
 from uagents_core.contrib.protocols.chat import ChatMessage, TextContent
 
+from doorstep.agents import coordinator_actions as actions
 from doorstep.agents.coordinator import DEMO_PREFIX, chat_proto
 from doorstep.agents.destination_provider import destination_proto
 from doorstep.agents.provider_client import request_acceptance
 from doorstep.agents.transport_provider import transport_proto
+from tests.integration.backend_fixtures import confirm_needs, make_backend
 from tests.integration.conftest import make_agent, run_until
 
 
@@ -27,7 +29,7 @@ async def providers(monkeypatch):
     return [transport, destination]
 
 
-async def test_chat_fans_out_to_both_provider_agents(providers):
+async def ask_coordinator(providers, text: str) -> str:
     coordinator = make_agent("coordinator")
     coordinator.include(chat_proto)
     tester = make_agent("asi_one_user")
@@ -38,7 +40,7 @@ async def test_chat_fans_out_to_both_provider_agents(providers):
     async def ask(ctx: Context):
         await ctx.send(coordinator.address, ChatMessage(
             timestamp=datetime.now(timezone.utc), msg_id=uuid4(),
-            content=[TextContent(type="text", text="Show available suitable providers")]))
+            content=[TextContent(type="text", text=text)]))
 
     @tester.on_message(ChatMessage)
     async def on_reply(ctx: Context, sender: str, msg: ChatMessage):
@@ -46,13 +48,59 @@ async def test_chat_fans_out_to_both_provider_agents(providers):
         done.set()
 
     await run_until([coordinator, tester, *providers], done)
+    assert replies[0].startswith(DEMO_PREFIX)
+    return replies[0]
 
-    text = replies[0]
-    assert text.startswith(DEMO_PREFIX)
-    assert "Transport agent returned 5 vehicles" in text
-    assert "Destination agent returned 3 sites" in text
-    assert "transport_org_b sedan_b1: wheelchair no" in text
-    assert "Nothing is assigned" in text
+
+@pytest.fixture
+async def backend(monkeypatch):
+    b = make_backend(monkeypatch)
+    monkeypatch.setattr(actions, "get_backend", lambda: b)
+    return b
+
+
+async def test_maria_offers_from_agents_are_evaluated_by_backend(providers, backend):
+    await confirm_needs(backend)
+    text = await ask_coordinator(providers, "Show available suitable providers for Maria")
+    assert "Transport agent returned 5 offers over Fetch.ai" in text
+    assert "Destination agent returned 3 offers over Fetch.ai" in text
+    assert "ELIGIBLE #1: transport_org_a" in text
+    assert "not suitable: transport_org_b (NOT_WHEELCHAIR_ACCESSIBLE" in text
+    assert "not suitable: transport_org_c (PROVIDER_NOT_APPROVED" in text
+    assert "ELIGIBLE #1: destination_org_a" in text
+    assert "Nothing is assigned yet" in text
+
+
+async def test_no_case_before_warning(providers, backend):
+    text = await ask_coordinator(providers, "Show available suitable providers for Maria")
+    assert "Start the simulated Zone 3 readiness check first" in text
+
+
+async def test_unconfirmed_needs_contact_no_provider(providers, backend):
+    await backend.start_demo_warning("zone_3", "la_hacks_demo_v1", "corr_setup")
+    text = await ask_coordinator(providers, "Show available suitable providers for Maria")
+    assert "not confirmed" in text
+    assert "agent returned" not in text
+
+
+async def test_start_readiness_check(providers, backend):
+    text = await ask_coordinator(providers, "Start the simulated Zone 3 readiness check")
+    assert "Simulated official warning verified for zone_3" in text
+    assert "case_maria_001" in text and "case_david_002" in text
+
+
+async def test_david_in_active_order_zone_is_blocked(providers, backend):
+    await confirm_needs(backend)
+    text = await ask_coordinator(providers, "Show providers for David")
+    assert "ELIGIBLE" not in text
+    assert "ACTIVE_ORDER_ZONE" in text
+    assert "assistance is NOT confirmed" in text
+
+
+async def test_status_uses_backend_summary(providers, backend):
+    await backend.start_demo_warning("zone_3", "la_hacks_demo_v1", "corr_setup")
+    text = await ask_coordinator(providers, "Status for Maria")
+    assert "Maria" in text
 
 
 async def _accept(providers, provider_id: str, assignment_id: str) -> list:

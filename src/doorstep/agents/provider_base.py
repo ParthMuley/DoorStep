@@ -8,6 +8,7 @@ only decides whether it accepts a proposed assignment.
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,8 @@ from doorstep.integrations.fetch_adapter import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+INTERNAL_FIELDS = {"accepts_requests"}
+OFFER_VALID_MINUTES = 30
 
 
 def load_inventory(filename: str, key: str) -> list[dict[str, Any]]:
@@ -46,8 +49,16 @@ def build_provider_protocol(role: ServiceType, inventory: list[dict[str, Any]]) 
         if msg.service_type != role:
             offers, note = [], f"This agent only serves {role} requests."
         else:
+            valid_until = (datetime.now(timezone.utc) + timedelta(minutes=OFFER_VALID_MINUTES)).strftime(
+                "%Y-%m-%dT%H:%M:%SZ")
+            # Contract v1.0 offer shape (sections 3.4/3.5); internal fields stay inside this agent.
             offers = [
-                {**item, "offer_id": f"offer_{msg.request_id}_{item['provider_id']}", "valid_for_minutes": 30}
+                {
+                    **{k: v for k, v in item.items() if k not in INTERNAL_FIELDS},
+                    "offer_id": f"offer_{msg.request_id}_{item['provider_id']}",
+                    "provider_agent_address": ctx.agent.address,
+                    "valid_until": valid_until,
+                }
                 for item in inventory
             ]
             note = "Raw synthetic capacity; eligibility is decided by the coordinator's deterministic matching."
