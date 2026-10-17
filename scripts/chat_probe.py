@@ -36,8 +36,8 @@ async def ack(ctx: Context, sender: str, msg: ChatAcknowledgement):
 @probe.on_message(ChatMessage)
 async def reply(ctx: Context, sender: str, msg: ChatMessage):
     print("\n----- COORDINATOR REPLY -----")
-    print("".join(c.text for c in msg.content if isinstance(c, TextContent)))
-    os._exit(0)
+    print("".join(c.text for c in msg.content if isinstance(c, TextContent)), flush=True)
+    os._exit(0)  # skips buffer flushing, hence flush=True above
 
 
 if __name__ == "__main__":

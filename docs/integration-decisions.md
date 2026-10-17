@@ -32,6 +32,15 @@ Owner: Developer A. Every claim here comes from official docs or the installed S
 | ASI autocomplete API purpose | open | Not used for agent transport. |
 | ASI:One shared-chat URL | open | |
 
+## Live evidence (2026-10-17)
+
+- All three agents registered as Agentverse mailbox agents automatically at startup (`Successfully registered as mailbox agent in Agentverse`), no Inspector clicks.
+  - Coordinator: `agent1qfnlwm4d4tm9pwczcmc4d3y76qr2df3kq732tyelpq00fklmrn7h2f3qqz0`
+  - Transport provider: `agent1qd3gnx9qmtdswprn88q2gjsfkjcm8zw8gd8fktt0565wrl7q2v6vwmx52hh`
+  - Destination provider: `agent1qtdt9wgqmwdaay0m7rjj7g8uv7hfl2n8qlneht5k6zzn2nlh8v73wmrppwc`
+- `scripts/chat_probe.py` (separate process) → Coordinator via Agentverse mailbox → Transport + Destination via their mailboxes → reply with 5 vehicles / 3 sites in ~21 s. Same `correlation_id` (`corr_001c6c5696c0`) logged by all three agents.
+- Pitfall seen: an ASI:One `sk_` key is not an Agentverse key; Agentverse returns `Could not validate credentials`. Agentverse keys are JWTs from agentverse.ai → API Keys.
+
 ## Local evidence
 
 - Coordinator address (local seed from `.env`): `agent1qfnlwm4d4tm9pwczcmc4d3y76qr2df3kq732tyelpq00fklmrn7h2f3qqz0`
