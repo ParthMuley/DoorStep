@@ -2,11 +2,11 @@
 
 import pytest
 
-from doorstep.models import Assignment, Confirmation, Evidence
-from doorstep.services.errors import Conflict, InsufficientEvidence, InvalidTransition
+from doorstep.models import Assignment, Confirmation
+from doorstep.services.errors import InsufficientEvidence, InvalidTransition
 from doorstep.services.transitions import check_communication_transition, check_resident_transition
 
-from .conftest import MARIA, arrival_evidence, maria_accepted, maria_proposed, pickup_evidence
+from .conftest import MARIA, arrival_ev, maria_accepted, maria_proposed, pickup_ev
 
 
 def _assignment(**kw):
@@ -45,62 +45,83 @@ def test_proposal_does_not_change_resident_status(svc):
 
 
 def test_provider_acceptance_does_not_set_pickup_or_arrival(svc):
-    ta, _ = maria_accepted(svc)
-    assert svc.store.get_case(MARIA).resident_status == "PROVIDER_ACCEPTED"
-    assert ta.confirmed_pickup_at is None and ta.confirmed_arrival_at is None
+    aid = maria_accepted(svc)
     view = svc.get_case_status(MARIA)
-    assert view["map"]["color"] == "yellow"
-    assert not view["evidence"]["pickup_confirmed"] and not view["evidence"]["arrival_confirmed"]
+    assert view["resident_status"] == "PROVIDER_ACCEPTED" and view["map"]["color"] == "yellow"
+    assert view["active_assignment"]["assignment_id"] == aid
+    assert view["active_assignment"]["confirmed_pickup_at"] is None
+    assert view["active_assignment"]["confirmed_arrival_at"] is None
+
+
+def test_pickup_before_acceptance_rejected(svc):
+    aid = maria_proposed(svc)
+    with pytest.raises(InvalidTransition):
+        svc.confirm_pickup(aid, pickup_ev())
 
 
 def test_pickup_does_not_set_arrival(svc):
-    ta, _ = maria_accepted(svc)
-    out = svc.confirm_pickup(ta.assignment_id, pickup_evidence(ta))
-    assert out["resident_status"] == "PICKUP_CONFIRMED"
-    assert out["assignment"]["confirmed_arrival_at"] is None
+    aid = maria_accepted(svc)
+    out = svc.confirm_pickup(aid, pickup_ev())
+    assert out["resident_status"] == "PICKUP_CONFIRMED" and out["confirmed_arrival_at"] is None
     assert svc.get_case_status(MARIA)["map"]["color"] == "blue"
 
 
 def test_arrival_requires_pickup_first(svc):
-    ta, da = maria_accepted(svc)
+    aid = maria_accepted(svc)
     with pytest.raises(InvalidTransition):
-        svc.confirm_arrival(ta.assignment_id, arrival_evidence(da))
+        svc.confirm_arrival(aid, arrival_ev())
 
 
-def test_arrival_requires_agreed_destination(svc):
-    ta, da = maria_proposed(svc)
-    svc.respond_assignment(ta.assignment_id, ta.provider_id, True)
-    ta = svc.store.get_assignment(ta.assignment_id)
-    svc.confirm_pickup(ta.assignment_id, pickup_evidence(ta))
-    with pytest.raises(Conflict):
-        svc.confirm_arrival(ta.assignment_id, arrival_evidence(da))
+def test_arrival_requires_accepted_destination(svc):
+    aid = maria_proposed(svc)
+    svc.respond_assignment(aid, "transport_org_a", "ACCEPTED")  # destination never accepts
+    svc.confirm_pickup(aid, pickup_ev())
+    with pytest.raises(InvalidTransition) as exc:
+        svc.confirm_arrival(aid, arrival_ev())
+    assert "NO_AGREED_DESTINATION" in exc.value.reasons
     assert svc.store.get_case(MARIA).resident_status == "PICKUP_CONFIRMED"
 
 
 def test_green_only_after_arrival_evidence(svc):
-    ta, da = maria_accepted(svc)
-    svc.confirm_pickup(ta.assignment_id, pickup_evidence(ta))
-    svc.confirm_arrival(ta.assignment_id, arrival_evidence(da))
+    aid = maria_accepted(svc)
+    svc.confirm_pickup(aid, pickup_ev())
+    out = svc.confirm_arrival(aid, arrival_ev())
+    assert out["service_status"] == "COMPLETED"
     view = svc.get_case_status(MARIA)
-    assert view["map"]["color"] == "green"
-    assert view["evidence"]["timeline_replay_matches_status"]
+    assert view["map"]["color"] == "green" and view["evidence"]["timeline_replay_matches_status"]
 
 
 def test_pickup_evidence_needs_provider_and_resident(svc):
-    ta, _ = maria_accepted(svc)
-    only_provider = Evidence(confirmations=[Confirmation(party="transport_provider", party_id=ta.provider_id)])
+    aid = maria_accepted(svc)
     with pytest.raises(InsufficientEvidence):
-        svc.confirm_pickup(ta.assignment_id, only_provider)
-    impostor = Evidence(confirmations=[Confirmation(party="transport_provider", party_id="transport_org_b"),
-                                       Confirmation(party="resident", party_id="resident_001")])
+        svc.confirm_pickup(aid, pickup_ev(resident_confirmed=False))
     with pytest.raises(InsufficientEvidence):
-        svc.confirm_pickup(ta.assignment_id, impostor)
+        svc.confirm_pickup(aid, pickup_ev(provider_confirmed=False))
     assert svc.store.get_case(MARIA).resident_status == "PROVIDER_ACCEPTED"
 
 
+def test_identified_confirmations_are_checked(svc):
+    aid = maria_accepted(svc)
+    impostor = pickup_ev(confirmations=[Confirmation(party="transport_provider", party_id="transport_org_b")])
+    with pytest.raises(InsufficientEvidence):
+        svc.confirm_pickup(aid, impostor)
+    good = pickup_ev(confirmations=[Confirmation(party="transport_provider", party_id="transport_org_a"),
+                                    Confirmation(party="resident", party_id="resident_001")])
+    svc.confirm_pickup(aid, good)
+    assert svc.store.verifications_for_case(MARIA)[-1].party_ids_verified is True
+
+
+def test_arrival_checkin_must_come_from_agreed_destination(svc):
+    aid = maria_accepted(svc)
+    svc.confirm_pickup(aid, pickup_ev())
+    with pytest.raises(InsufficientEvidence):
+        svc.confirm_arrival(aid, arrival_ev(destination_provider_id="destination_org_b"))
+    with pytest.raises(InsufficientEvidence):
+        svc.confirm_arrival(aid, arrival_ev(provider_confirmed=False))
+
+
 def test_duplicate_pickup_confirmation_is_idempotent(svc):
-    ta, _ = maria_accepted(svc)
-    svc.confirm_pickup(ta.assignment_id, pickup_evidence(ta))
-    again = svc.confirm_pickup(ta.assignment_id, pickup_evidence(ta))
-    assert again["duplicate"] is True
+    aid = maria_accepted(svc)
+    svc.confirm_pickup(aid, pickup_ev())
+    assert svc.confirm_pickup(aid, pickup_ev())["duplicate"] is True
     assert len([v for v in svc.store.verifications_for_case(MARIA) if v.kind == "pickup"]) == 1

@@ -8,16 +8,16 @@ if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
 from doorstep.demo import seed  # noqa: E402
-from doorstep.models import Confirmation, Evidence  # noqa: E402
+from doorstep.models import DestinationOfferIn, Evidence, TransportOfferIn  # noqa: E402
 from doorstep.services.db import Database  # noqa: E402
 from doorstep.services.engine import DoorstepService  # noqa: E402
 
 MARIA = "case_maria_001"
 DAVID = "case_david_002"
-MARIA_PHONE = "sms:+15555550101"
-DAVID_PHONE = "sms:+15555550102"
-DAVID_CAREGIVER_PHONE = "sms:+15555550103"
-TOKEN = "doorstep-local-demo-token"
+MARIA_SENDER = seed.MARIA_SENDER
+DAVID_SENDER = seed.DAVID_SENDER
+DAVID_CAREGIVER_SENDER = seed.DAVID_CAREGIVER_SENDER
+TOKEN = "change-me-local-demo-token"
 
 
 @pytest.fixture
@@ -28,62 +28,76 @@ def svc() -> DoorstepService:
 
 
 @pytest.fixture
-def client():
+def client(monkeypatch):
     from fastapi.testclient import TestClient
 
     from doorstep.api.app import create_app
 
+    monkeypatch.delenv("DEMO_AUTH_TOKEN", raising=False)
     app = create_app(":memory:", seed=True)
-    return TestClient(app, headers={"X-Demo-Token": TOKEN})
+    return TestClient(app, headers={"Authorization": f"Bearer {TOKEN}"})
 
 
 def warn(svc):
-    return svc.start_demo_warning(seed.DEMO_ZONE, seed.SCENARIO_A)
+    return svc.start_demo_warning(seed.DEMO_ZONE, seed.SCENARIO_ID)
+
+
+def t_offers(**overrides_by_id):
+    out = []
+    for raw in seed.transport_offers():
+        raw.update(overrides_by_id.get(raw["offer_id"], {}))
+        out.append(TransportOfferIn(**raw))
+    return out
+
+
+def d_offers():
+    return [DestinationOfferIn(**raw) for raw in seed.destination_offers()]
 
 
 def maria_confirmed(svc) -> str:
     warn(svc)
-    svc.submit_resident_response(MARIA, "Necesito ayuda, uso silla de ruedas y tengo un perro", "es",
-                                 sender=MARIA_PHONE, external_id="m1")
-    svc.submit_resident_response(MARIA, "Sí", "es", sender=MARIA_PHONE, external_id="m2")
+    svc.submit_resident_response(MARIA, "1 Necesito ayuda, uso silla de ruedas y tengo un perro", "es",
+                                 sender=MARIA_SENDER, external_id="m1")
+    svc.submit_resident_response(MARIA, "SI", "es", sender=MARIA_SENDER, external_id="m2")
     return MARIA
 
 
-def eligible(result, provider_id=None):
-    offers = [o for o in result["offers"] if o["eligible"]]
-    if provider_id:
-        offers = [o for o in offers if o["provider_id"] == provider_id]
-    return offers[0]
-
-
-def maria_proposed(svc):
+def maria_evaluated(svc):
     maria_confirmed(svc)
-    t = svc.find_transport(MARIA)
-    d = svc.find_destination(MARIA)
-    ta = svc.propose_assignment(MARIA, eligible(t)["offer_id"])
-    da = svc.propose_assignment(MARIA, eligible(d)["offer_id"])
-    return ta, da
+    t = svc.evaluate_transport(MARIA, t_offers(), "req_001")
+    d = svc.evaluate_destination(MARIA, d_offers(), "req_002")
+    return t, d
 
 
-def maria_accepted(svc):
-    ta, da = maria_proposed(svc)
-    svc.respond_assignment(ta.assignment_id, ta.provider_id, True)
-    svc.respond_assignment(da.assignment_id, da.provider_id, True)
-    return svc.store.get_assignment(ta.assignment_id), svc.store.get_assignment(da.assignment_id)
+def maria_proposed(svc) -> str:
+    maria_evaluated(svc)
+    view, _ = svc.propose_assignment(MARIA, transport_offer_id="offer_t_001", destination_offer_id="offer_d_001",
+                                     idempotency_key=f"{MARIA}:transport:v1")
+    return view["assignment_id"]
 
 
-def pickup_evidence(ta):
-    return Evidence(confirmations=[Confirmation(party="transport_provider", party_id=ta.provider_id),
-                                   Confirmation(party="resident", party_id="resident_001")])
+def maria_accepted(svc) -> str:
+    aid = maria_proposed(svc)
+    svc.respond_assignment(aid, "transport_org_a", "ACCEPTED")
+    svc.respond_assignment(aid, "destination_org_a", "ACCEPTED")
+    return aid
 
 
-def arrival_evidence(da):
-    return Evidence(confirmations=[Confirmation(party="destination_provider", party_id=da.provider_id),
-                                   Confirmation(party="resident", party_id="resident_001")])
+def pickup_ev(**kw):
+    base = dict(type="PROVIDER_AND_RESIDENT_CONFIRMATION", provider_confirmed=True, resident_confirmed=True,
+                code_verified=True)
+    base.update(kw)
+    return Evidence(**base)
+
+
+def arrival_ev(**kw):
+    base = dict(type="DESTINATION_CHECKIN", destination_provider_id="destination_org_a", provider_confirmed=True)
+    base.update(kw)
+    return Evidence(**base)
 
 
 def david_confirmed(svc) -> str:
     warn(svc)
-    svc.submit_resident_response(DAVID, "1", "en", sender=DAVID_PHONE, external_id="d1")
-    svc.submit_resident_response(DAVID, "yes", "en", sender=DAVID_PHONE, external_id="d2")
+    svc.submit_resident_response(DAVID, "1", "en", sender=DAVID_SENDER, external_id="d1")
+    svc.submit_resident_response(DAVID, "yes", "en", sender=DAVID_SENDER, external_id="d2")
     return DAVID

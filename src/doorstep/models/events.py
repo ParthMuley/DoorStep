@@ -66,15 +66,26 @@ class MessageEvent(DoorstepModel):
 
 
 class Confirmation(DoorstepModel):
-    """One party's confirmation. A code helps confirm contact, not safety."""
+    """One identified party's confirmation (proposed contract v1.1)."""
 
     party: EvidenceParty
     party_id: str
-    method: str = "simulated_message"
-    note: str = ""
 
 
 class Evidence(DoorstepModel):
+    """Pickup / arrival evidence (contract v1.0 sections 3.8-3.9).
+
+    A one-time code helps confirm contact; it never proves safety.
+    ``confirmations`` (party ids) is optional; when present every id is checked.
+    """
+
+    type: str  # PROVIDER_AND_RESIDENT_CONFIRMATION | DESTINATION_CHECKIN
+    provider_confirmed: bool = False
+    resident_confirmed: bool = False
+    caregiver_confirmed: bool = False
+    code_verified: bool = False
+    destination_provider_id: Optional[str] = None
+    source: str = "SIMULATED"
     confirmations: list[Confirmation] = Field(default_factory=list)
 
 
@@ -85,6 +96,7 @@ class VerificationEvent(DoorstepModel):
     assignment_id: str
     kind: str  # "pickup" | "arrival"
     evidence: Evidence
+    party_ids_verified: bool = False  # True only when identified confirmations were checked
     correlation_id: str = ""
     created_at: str = Field(default_factory=utc_now_iso)
 

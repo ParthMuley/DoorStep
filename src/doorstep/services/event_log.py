@@ -40,7 +40,7 @@ class EventLog:
         to_status: Optional[str] = None,
     ) -> StatusEvent:
         event = StatusEvent(
-            event_id=self.db.next_id("event"),
+            event_id=self.db.next_id("evt"),
             case_id=case_id,
             correlation_id=correlation_id,
             event_type=event_type,

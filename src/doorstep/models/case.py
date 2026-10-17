@@ -38,6 +38,7 @@ class Case(DoorstepModel):
     case_id: str
     resident_id: str
     zone_id: str
+    sector_id: Optional[str] = None
     scenario_id: Optional[str] = None
     needs: Needs = Field(default_factory=Needs)
     consent: Consent = Field(default_factory=Consent)

@@ -2,78 +2,100 @@
 
 import pytest
 
-from doorstep.services.errors import Conflict, Unauthorized
+from doorstep.services.errors import Conflict, InvalidTransition, Unauthorized
 
-from .conftest import MARIA, eligible, maria_confirmed, maria_proposed
+from .conftest import MARIA, maria_confirmed, maria_evaluated, maria_proposed, t_offers
 
 
 def test_duplicate_acceptance_is_idempotent(svc):
-    ta, _ = maria_proposed(svc)
-    svc.respond_assignment(ta.assignment_id, ta.provider_id, True)
-    again = svc.respond_assignment(ta.assignment_id, ta.provider_id, True)
+    aid = maria_proposed(svc)
+    svc.respond_assignment(aid, "transport_org_a", "ACCEPTED")
+    again = svc.respond_assignment(aid, "transport_org_a", "ACCEPTED")
     assert again["duplicate"] is True
     accepted = [a for a in svc.store.assignments_for_case(MARIA, "accessible_transport") if a.status == "ACCEPTED"]
     assert len(accepted) == 1
-    assert svc.store.get_transport_provider(ta.provider_id).available_trips == 0  # decremented once
 
 
-def test_duplicate_proposal_returns_same_assignment(svc):
-    maria_confirmed(svc)
-    offer = eligible(svc.find_transport(MARIA))
-    a1 = svc.propose_assignment(MARIA, offer["offer_id"])
-    a2 = svc.propose_assignment(MARIA, offer["offer_id"])
-    assert a1.assignment_id == a2.assignment_id
+def test_repeated_idempotency_key_returns_original(svc):
+    maria_evaluated(svc)
+    v1, created1 = svc.propose_assignment(MARIA, transport_offer_id="offer_t_001", idempotency_key="k1")
+    v2, created2 = svc.propose_assignment(MARIA, transport_offer_id="offer_t_001", idempotency_key="k1")
+    assert (created1, created2) == (True, False) and v1["assignment_id"] == v2["assignment_id"]
 
 
 def test_only_one_accepted_assignment_and_late_reply_cannot_revive(svc):
-    maria_confirmed(svc)
-    t = svc.find_transport(MARIA)
-    a = svc.propose_assignment(MARIA, eligible(t, "transport_org_a")["offer_id"])
-    e = svc.propose_assignment(MARIA, eligible(t, "transport_org_e")["offer_id"])
-    svc.respond_assignment(a.assignment_id, a.provider_id, True)
-    assert svc.store.get_assignment(e.assignment_id).status == "CANCELED"
-    with pytest.raises(Conflict):
-        svc.respond_assignment(e.assignment_id, e.provider_id, True)  # delayed acceptance
+    maria_evaluated(svc)
+    a, _ = svc.propose_assignment(MARIA, transport_offer_id="offer_t_001", idempotency_key="ka")
+    e, _ = svc.propose_assignment(MARIA, transport_offer_id="offer_t_005", idempotency_key="ke")
+    svc.respond_assignment(a["assignment_id"], "transport_org_a", "ACCEPTED")
+    assert svc.store.get_assignment(e["assignment_id"]).status == "CANCELED"
+    with pytest.raises(InvalidTransition):
+        svc.respond_assignment(e["assignment_id"], "transport_org_e", "ACCEPTED")  # delayed acceptance
     accepted = [x for x in svc.store.assignments_for_case(MARIA, "accessible_transport") if x.status == "ACCEPTED"]
     assert [x.provider_id for x in accepted] == ["transport_org_a"]
     assert any(ev.event_type == "LATE_RESPONSE_IGNORED" for ev in svc.events.for_case(MARIA))
 
 
+def test_cannot_propose_after_acceptance(svc):
+    aid = maria_proposed(svc)
+    svc.respond_assignment(aid, "transport_org_a", "ACCEPTED")
+    with pytest.raises(Conflict):
+        svc.propose_assignment(MARIA, transport_offer_id="offer_t_005", idempotency_key="other")
+
+
 def test_wrong_provider_cannot_respond(svc):
-    ta, _ = maria_proposed(svc)
+    aid = maria_proposed(svc)
     with pytest.raises(Unauthorized):
-        svc.respond_assignment(ta.assignment_id, "transport_org_b", True)
-    assert svc.store.get_assignment(ta.assignment_id).status == "AWAITING_PROVIDER"
+        svc.respond_assignment(aid, "transport_org_b", "ACCEPTED")
+    assert svc.store.get_assignment(aid).status == "AWAITING_PROVIDER"
+
+
+def test_destination_provider_responds_on_same_assignment_id(svc):
+    aid = maria_proposed(svc)
+    out = svc.respond_assignment(aid, "destination_org_a", "ACCEPTED")
+    assert out["service_type"] == "accessible_destination" and out["pickup_details"] is None
+    assert out["resident_status"] == "NEEDS_ASSISTANCE"  # destination acceptance is not transport acceptance
 
 
 def test_decline_offers_alternate_provider(svc):
-    ta, _ = maria_proposed(svc)
-    out = svc.respond_assignment(ta.assignment_id, ta.provider_id, False)
-    assert out["assignment"]["status"] == "DECLINED"
-    assert out["resident_status"] == "NEEDS_ASSISTANCE"
-    assert "transport_org_e" in out["next_step"]
-    t = svc.find_transport(MARIA)
-    alt = svc.propose_assignment(MARIA, eligible(t, "transport_org_e")["offer_id"])
-    assert alt.status == "AWAITING_PROVIDER"
-    with pytest.raises(Conflict):  # declined provider cannot be silently re-proposed
-        svc.propose_assignment(MARIA, eligible(t, "transport_org_a")["offer_id"])
+    aid = maria_proposed(svc)
+    out = svc.respond_assignment(aid, "transport_org_a", "DECLINED")
+    assert out["service_status"] == "DECLINED" and out["resident_status"] == "NEEDS_ASSISTANCE"
+    assert "offer_t_005" in out["next_step"]
+    alt, _ = svc.propose_assignment(MARIA, transport_offer_id="offer_t_005", idempotency_key="alt")
+    assert alt["service_status"] == "AWAITING_PROVIDER"
+    with pytest.raises(Conflict):  # declined provider is not silently re-proposed
+        svc.propose_assignment(MARIA, transport_offer_id="offer_t_001", idempotency_key="again")
 
 
 def test_all_providers_decline_leaves_case_unresolved(svc):
-    maria_confirmed(svc)
-    t = svc.find_transport(MARIA)
-    for pid in ("transport_org_a", "transport_org_e"):
-        a = svc.propose_assignment(MARIA, eligible(t, pid)["offer_id"])
-        svc.respond_assignment(a.assignment_id, pid, False)
+    maria_evaluated(svc)
+    for oid, pid in (("offer_t_001", "transport_org_a"), ("offer_t_005", "transport_org_e")):
+        view, _ = svc.propose_assignment(MARIA, transport_offer_id=oid, idempotency_key=oid)
+        svc.respond_assignment(view["assignment_id"], pid, "DECLINED")
     view = svc.get_case_status(MARIA)
-    assert view["case"]["resident_status"] == "REQUIRES_COORDINATOR"
-    assert view["unresolved"] is True
-    assert view["evidence"]["assistance_confirmed"] is False
+    assert view["resident_status"] == "REQUIRES_COORDINATOR" and view["unresolved"] is True
+    assert view["evidence"]["provider_accepted"] is False
 
 
 def test_provider_cancel_after_acceptance_returns_to_needs_assistance(svc):
-    ta, _ = maria_proposed(svc)
-    svc.respond_assignment(ta.assignment_id, ta.provider_id, True)
-    out = svc.respond_assignment(ta.assignment_id, ta.provider_id, False)
-    assert out["assignment"]["status"] == "CANCELED"
-    assert out["resident_status"] == "NEEDS_ASSISTANCE"
+    aid = maria_proposed(svc)
+    svc.respond_assignment(aid, "transport_org_a", "ACCEPTED")
+    out = svc.respond_assignment(aid, "transport_org_a", "DECLINED")
+    assert out["service_status"] == "CANCELED" and out["resident_status"] == "NEEDS_ASSISTANCE"
+
+
+def test_no_eligible_offers_means_unresolved(svc):
+    maria_confirmed(svc)
+    out = svc.evaluate_transport(MARIA, [], "req_empty")
+    assert out["eligible"] == [] and out["escalation_required"] is True
+    assert svc.store.get_case(MARIA).resident_status == "REQUIRES_COORDINATOR"
+
+
+def test_offer_ids_are_scoped_per_case(svc):
+    maria_evaluated(svc)
+    from .conftest import david_confirmed
+    david_confirmed(svc)
+    svc.evaluate_transport("case_david_002", t_offers(), "req_101")
+    assert svc.store.get_offer(MARIA, "offer_t_001").eligible is True
+    assert svc.store.get_offer("case_david_002", "offer_t_001").eligible is False

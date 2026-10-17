@@ -23,9 +23,8 @@ CREATE TABLE IF NOT EXISTS organizations (organization_id TEXT PRIMARY KEY, data
 CREATE TABLE IF NOT EXISTS residents (
   resident_id TEXT PRIMARY KEY, zone_id TEXT NOT NULL, contact_channel TEXT NOT NULL, data TEXT NOT NULL);
 
--- Provider-owned inventories (separate tables, never joined into case rows).
-CREATE TABLE IF NOT EXISTS transport_inventory (provider_id TEXT PRIMARY KEY, data TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS destination_inventory (provider_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+-- Partner-org approval registry. Provider inventories live with A's provider agents.
+CREATE TABLE IF NOT EXISTS provider_registry (provider_id TEXT PRIMARY KEY, data TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS alerts (
   alert_id TEXT PRIMARY KEY, zone_id TEXT NOT NULL, official_verified INTEGER NOT NULL, data TEXT NOT NULL);
@@ -34,14 +33,15 @@ CREATE TABLE IF NOT EXISTS cases (
   case_id TEXT PRIMARY KEY, resident_id TEXT NOT NULL, zone_id TEXT NOT NULL,
   resident_status TEXT NOT NULL, communication_status TEXT NOT NULL, data TEXT NOT NULL);
 
+-- Keyed by case + service + request_id (request ids come from the coordinator).
 CREATE TABLE IF NOT EXISTS service_requests (
-  request_id TEXT PRIMARY KEY, case_id TEXT NOT NULL, service_type TEXT NOT NULL,
-  status TEXT NOT NULL, idempotency_key TEXT NOT NULL UNIQUE, data TEXT NOT NULL);
+  idempotency_key TEXT PRIMARY KEY, request_id TEXT NOT NULL, case_id TEXT NOT NULL,
+  service_type TEXT NOT NULL, status TEXT NOT NULL, data TEXT NOT NULL);
 
+-- Offer ids come from provider agents and are only unique within a case.
 CREATE TABLE IF NOT EXISTS offers (
-  offer_id TEXT PRIMARY KEY, request_id TEXT NOT NULL, case_id TEXT NOT NULL,
-  provider_id TEXT NOT NULL, eligible INTEGER NOT NULL, data TEXT NOT NULL,
-  UNIQUE (request_id, provider_id));
+  offer_key TEXT PRIMARY KEY, offer_id TEXT NOT NULL, request_id TEXT NOT NULL, case_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL, eligible INTEGER NOT NULL, data TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS assignments (
   assignment_id TEXT PRIMARY KEY, case_id TEXT NOT NULL, service_type TEXT NOT NULL,
@@ -75,9 +75,10 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS events_by_case ON events (case_id, seq);
 """
 
+SCHEMA_REVISION = 2  # bump when tables change; older local demo DBs are rebuilt
+
 TABLES = [
-    "counters", "settings", "organizations", "residents", "transport_inventory",
-    "destination_inventory", "alerts", "cases", "service_requests", "offers",
+    "counters", "settings", "organizations", "residents", "provider_registry", "alerts", "cases", "service_requests", "offers",
     "assignments", "verifications", "messages", "escalations", "referrals",
     "consent_grants", "events",
 ]
@@ -99,6 +100,13 @@ class Database:
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._lock = threading.RLock()
         self._depth = 0
+        if self._conn.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_REVISION:
+            # Demo-only DB: rebuild instead of migrating.
+            names = [r[0] for r in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")]
+            for name in names:
+                self._conn.execute(f"DROP TABLE IF EXISTS {name}")
+            self._conn.execute(f"PRAGMA user_version = {SCHEMA_REVISION}")
         self._conn.executescript(SCHEMA)
 
     @contextmanager
@@ -130,7 +138,7 @@ class Database:
         with self.tx() as conn:
             for table in TABLES:
                 conn.execute(f"DELETE FROM {table}")
-            conn.execute("DELETE FROM sqlite_sequence")
+            conn.execute("DELETE FROM sqlite_sequence WHERE 1")
 
     def next_id(self, prefix: str) -> str:
         """Deterministic sequential id (``assign_001``) -- reproducible after reset."""

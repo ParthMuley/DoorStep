@@ -11,15 +11,14 @@ from doorstep.models import (
     Assignment,
     Case,
     ConsentGrant,
-    Destination,
     Escalation,
     MessageEvent,
     Offer,
     Organization,
+    ProviderRegistration,
     RecoveryReferral,
     Resident,
     ServiceRequest,
-    TransportProvider,
     VerificationEvent,
 )
 
@@ -79,23 +78,15 @@ class Store:
     def list_residents(self) -> list[Resident]:
         return self._list("SELECT data FROM residents ORDER BY resident_id", (), Resident)
 
-    def save_transport_provider(self, p: TransportProvider) -> None:
-        self._upsert("transport_inventory", {"provider_id": p.provider_id, "data": p.model_dump_json()})
+    def save_registration(self, p: ProviderRegistration) -> None:
+        self._upsert("provider_registry", {"provider_id": p.provider_id, "data": p.model_dump_json()})
 
-    def get_transport_provider(self, provider_id: str) -> Optional[TransportProvider]:
-        return self._get("transport_inventory", "provider_id", provider_id, TransportProvider)
+    def get_registration(self, provider_id: str) -> Optional[ProviderRegistration]:
+        return self._get("provider_registry", "provider_id", provider_id, ProviderRegistration)
 
-    def list_transport_providers(self) -> list[TransportProvider]:
-        return self._list("SELECT data FROM transport_inventory ORDER BY provider_id", (), TransportProvider)
-
-    def save_destination(self, d: Destination) -> None:
-        self._upsert("destination_inventory", {"provider_id": d.provider_id, "data": d.model_dump_json()})
-
-    def get_destination(self, provider_id: str) -> Optional[Destination]:
-        return self._get("destination_inventory", "provider_id", provider_id, Destination)
-
-    def list_destinations(self) -> list[Destination]:
-        return self._list("SELECT data FROM destination_inventory ORDER BY provider_id", (), Destination)
+    def registry(self) -> dict[str, ProviderRegistration]:
+        regs = self._list("SELECT data FROM provider_registry ORDER BY provider_id", (), ProviderRegistration)
+        return {r.provider_id: r for r in regs}
 
     # --- alerts / cases ---------------------------------------------------
     def save_alert(self, a: AlertEvent) -> None:
@@ -130,30 +121,35 @@ class Store:
 
     # --- requests / offers / assignments ---------------------------------
     def save_request(self, r: ServiceRequest) -> None:
-        self._upsert("service_requests", {"request_id": r.request_id, "case_id": r.case_id,
-                                          "service_type": r.service_type, "status": r.status,
-                                          "idempotency_key": r.idempotency_key, "data": r.model_dump_json()})
-
-    def get_request(self, request_id: str) -> ServiceRequest:
-        return self._require("service_requests", "request_id", request_id, ServiceRequest)
+        self._upsert("service_requests", {"idempotency_key": r.idempotency_key, "request_id": r.request_id,
+                                          "case_id": r.case_id, "service_type": r.service_type,
+                                          "status": r.status, "data": r.model_dump_json()})
 
     def request_by_key(self, key: str) -> Optional[ServiceRequest]:
         return self._get("service_requests", "idempotency_key", key, ServiceRequest)
+
+    def find_request(self, case_id: str, service_type: str, request_id: str) -> ServiceRequest:
+        found = self._list("SELECT data FROM service_requests WHERE case_id = ? AND service_type = ? "
+                           "AND request_id = ?", (case_id, service_type, request_id), ServiceRequest)
+        if not found:
+            raise NotFound(f"Service request {request_id!r} not found")
+        return found[0]
 
     def requests_for_case(self, case_id: str) -> list[ServiceRequest]:
         return self._list("SELECT data FROM service_requests WHERE case_id = ? ORDER BY rowid",
                           (case_id,), ServiceRequest)
 
     def save_offer(self, o: Offer) -> None:
-        self._upsert("offers", {"offer_id": o.offer_id, "request_id": o.request_id, "case_id": o.case_id,
-                                "provider_id": o.provider_id, "eligible": int(o.eligible),
-                                "data": o.model_dump_json()})
+        self._upsert("offers", {"offer_key": f"{o.case_id}:{o.offer_id}", "offer_id": o.offer_id,
+                                "request_id": o.request_id, "case_id": o.case_id, "provider_id": o.provider_id,
+                                "eligible": int(o.eligible), "data": o.model_dump_json()})
 
-    def get_offer(self, offer_id: str) -> Offer:
-        return self._require("offers", "offer_id", offer_id, Offer)
+    def get_offer(self, case_id: str, offer_id: str) -> Offer:
+        return self._require("offers", "offer_key", f"{case_id}:{offer_id}", Offer)
 
-    def offers_for_request(self, request_id: str) -> list[Offer]:
-        return self._list("SELECT data FROM offers WHERE request_id = ? ORDER BY rowid", (request_id,), Offer)
+    def offers_for_request(self, case_id: str, request_id: str) -> list[Offer]:
+        return self._list("SELECT data FROM offers WHERE case_id = ? AND request_id = ? ORDER BY rowid",
+                          (case_id, request_id), Offer)
 
     def offers_for_case(self, case_id: str) -> list[Offer]:
         return self._list("SELECT data FROM offers WHERE case_id = ? ORDER BY rowid", (case_id,), Offer)
@@ -166,6 +162,9 @@ class Store:
 
     def get_assignment(self, assignment_id: str) -> Assignment:
         return self._require("assignments", "assignment_id", assignment_id, Assignment)
+
+    def find_assignment(self, assignment_id: str) -> Optional[Assignment]:
+        return self._get("assignments", "assignment_id", assignment_id, Assignment)
 
     def assignment_by_key(self, key: str) -> Optional[Assignment]:
         return self._get("assignments", "idempotency_key", key, Assignment)

@@ -19,4 +19,4 @@ for _ in $(seq 1 50); do
 done
 curl -fsS "$API/health" >/dev/null || { echo "backend failed to start"; exit 1; }
 
-"$PY" -m doorstep.demo.scenarios --base-url "$API" --token "$DOORSTEP_DEMO_TOKEN"
+"$PY" -m doorstep.demo.scenarios --base-url "$API" --token "$DEMO_AUTH_TOKEN"

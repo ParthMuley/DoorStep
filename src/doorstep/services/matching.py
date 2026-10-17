@@ -1,136 +1,212 @@
-"""Deterministic matching. Plain code, no LLM, no ranking of people.
+"""Deterministic evaluation of RAW provider offers. Plain code, no LLM.
 
-Every provider in the inventory is evaluated and returned with reasons, so the
-coordinator can show *why* each one matches or is rejected. Eligible offers are
-ranked only by non-safety factors (route distance on the fictional graph).
-
-These functions are pure: Developer A's provider agents can call them against
-their own local inventories.
+Provider agents (Developer A) send raw offers; this module decides eligibility
+and explains every rejection. Approval and base location come from B's partner
+registry -- never from the offer's own claims. Eligible offers are ranked only
+by non-safety factors (ETA, then fictional route distance). Nothing here ranks
+people.
 """
 
 from __future__ import annotations
 
-from typing import Callable
+from datetime import datetime, timezone
+from typing import Optional
 
 from doorstep.demo.synthetic_zone_graph import ZoneGraph
 from doorstep.models import (
-    Destination,
+    DestinationOfferIn,
     DestinationRequirements,
     Offer,
-    ServiceRequest,
+    ProviderRegistration,
     ServiceType,
-    TransportProvider,
+    TransportOfferIn,
     TransportRequirements,
+    ZoneRule,
 )
 
-from .safety_rules import check_route
+from .safety_rules import check_route, zone_rule
+
+TRANSPORT = ServiceType.ACCESSIBLE_TRANSPORT.value
+DESTINATION = ServiceType.ACCESSIBLE_DESTINATION.value
 
 
-def evaluate_transport(
-    req: TransportRequirements, zone_id: str, provider: TransportProvider, graph: ZoneGraph
-) -> tuple[list[str], float | None]:
-    """(rejection reasons, route distance). No reasons == eligible."""
-    reasons: list[str] = []
-    v = provider.vehicle
-    if not provider.approved:
-        reasons.append("PROVIDER_NOT_APPROVED")
-    if graph.is_active_order(zone_id):
-        reasons.append("INSIDE_ACTIVE_ORDER_ZONE")
-    if zone_id not in provider.service_area_zones:
+def _expired(valid_until: Optional[str], now: datetime) -> bool:
+    if not valid_until:
+        return False
+    try:
+        ts = datetime.fromisoformat(valid_until.replace("Z", "+00:00"))
+    except ValueError:
+        return True  # unparseable expiry is treated as expired (fail closed)
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts <= now
+
+
+def _approval_reasons(reg: Optional[ProviderRegistration], service_type: str) -> list[str]:
+    if reg is None or not reg.approved or reg.service_type != service_type:
+        return ["PROVIDER_NOT_APPROVED"]
+    return []
+
+
+def _zone_reasons(rule: str) -> list[str]:
+    if rule == ZoneRule.INSIDE_ACTIVE_ORDER:
+        return ["ACTIVE_ORDER_ZONE"]
+    if rule == ZoneRule.UNVERIFIED:
+        return ["ZONE_UNVERIFIED"]
+    return []
+
+
+def evaluate_transport(req: TransportRequirements, zone_id: str, sector_id: Optional[str],
+                       offer: TransportOfferIn, reg: Optional[ProviderRegistration], graph: ZoneGraph,
+                       now: Optional[datetime] = None) -> tuple[list[str], list[str], Optional[float]]:
+    """(rejection reasons, match reasons, route km). No rejection reasons == eligible."""
+    now = now or datetime.now(timezone.utc)
+    location = sector_id or zone_id
+    rule = zone_rule(graph, location)
+    reasons = _approval_reasons(reg, TRANSPORT) + _zone_reasons(rule)
+    match: list[str] = []
+
+    if zone_id in offer.service_area_zones or location in offer.service_area_zones:
+        match.append("in_service_area")
+    else:
         reasons.append("OUTSIDE_SERVICE_AREA")
-    if not provider.available or provider.available_trips < 1:
-        reasons.append("NO_AVAILABLE_CAPACITY")
-    if req.wheelchair_accessible_vehicle and not v.wheelchair_accessible:
-        reasons.append("NOT_WHEELCHAIR_ACCESSIBLE")
-    if req.transfer_assistance and not v.transfer_assistance:
-        reasons.append("NO_TRANSFER_ASSISTANCE")
-    if req.portable_oxygen_equipment and not v.oxygen_equipment_handling:
-        reasons.append("NO_OXYGEN_EQUIPMENT_HANDLING")
-    if req.pet_count > v.pet_capacity:
-        reasons.append("INSUFFICIENT_PET_CAPACITY")
-    if req.service_animal and not v.service_animal_ok:
-        reasons.append("SERVICE_ANIMAL_NOT_ACCOMMODATED")
-    if v.seating_capacity < 1:
-        reasons.append("NO_SEATING_CAPACITY")
-    distance = None
-    if not graph.is_active_order(zone_id):
-        route = check_route(graph, provider.base_zone, zone_id)
-        if route.ok:
-            distance = route.distance_km
+    if _expired(offer.valid_until, now):
+        reasons.append("OFFER_EXPIRED")
+    if offer.seats_available < 1:
+        reasons.append("NO_SEATS_AVAILABLE")
+
+    if req.wheelchair_accessible_vehicle:
+        if not offer.wheelchair_accessible:
+            reasons.append("NOT_WHEELCHAIR_ACCESSIBLE")
+        elif offer.wheelchair_spaces_available < 1:
+            reasons.append("NO_WHEELCHAIR_SPACE_AVAILABLE")
         else:
-            reasons.append(route.reason)
-    return reasons, distance
+            match.append("wheelchair_accessible")
+    if req.transfer_assistance:
+        if offer.transfer_assistance:
+            match.append("transfer_assistance")
+        else:
+            reasons.append("NO_TRANSFER_ASSISTANCE")
+    if req.portable_oxygen_equipment:
+        if offer.oxygen_handling:
+            match.append("oxygen_handling")
+        else:
+            reasons.append("NO_OXYGEN_HANDLING")
+    if req.pet_count > 0:
+        if offer.pets_allowed:
+            match.append("pets_allowed")
+        else:
+            reasons.append("PETS_NOT_ALLOWED")
+    if req.service_animal:
+        if offer.service_animals_allowed is True:
+            match.append("service_animal_allowed")
+        elif offer.service_animals_allowed is False:
+            reasons.append("SERVICE_ANIMAL_NOT_ACCOMMODATED")
+        else:
+            reasons.append("SERVICE_ANIMAL_UNCONFIRMED")
+
+    distance = None
+    if rule == ZoneRule.OUTSIDE_ACTIVE_ORDER:
+        base = (reg.base_zone if reg else None) or offer.base_zone
+        if not base:
+            reasons.append("PROVIDER_BASE_UNKNOWN")
+        else:
+            route = check_route(graph, base, location)
+            if route.ok:
+                distance = route.distance_km
+                match.append("route_avoids_closed_roads")
+            else:
+                reasons.append(route.reason)
+    if not reasons:
+        match.append("provider_approved")
+    return reasons, match, distance
 
 
-def evaluate_destination(
-    req: DestinationRequirements, pickup_zone: str, dest: Destination, graph: ZoneGraph
-) -> tuple[list[str], float | None]:
-    reasons: list[str] = []
-    if not dest.approved:
-        reasons.append("PROVIDER_NOT_APPROVED")
-    if graph.is_active_order(dest.zone_id):
+def evaluate_destination(req: DestinationRequirements, zone_id: str, sector_id: Optional[str],
+                         offer: DestinationOfferIn, reg: Optional[ProviderRegistration], graph: ZoneGraph,
+                         now: Optional[datetime] = None) -> tuple[list[str], list[str], Optional[float]]:
+    now = now or datetime.now(timezone.utc)
+    location = sector_id or zone_id
+    rule = zone_rule(graph, location)
+    reasons = _approval_reasons(reg, DESTINATION) + _zone_reasons(rule)
+    match: list[str] = []
+    dest_zone = (reg.base_zone if reg else None) or offer.zone_id
+
+    if dest_zone and graph.is_active_order(dest_zone):
         reasons.append("DESTINATION_IN_ACTIVE_ORDER_ZONE")
-    if dest.available_capacity < req.capacity_needed:
-        reasons.append("NO_AVAILABLE_CAPACITY")
-    if req.step_free_entry and not dest.step_free_entry:
-        reasons.append("NOT_STEP_FREE")
-    if req.accessible_restroom and not dest.accessible_restroom:
-        reasons.append("NO_ACCESSIBLE_RESTROOM")
-    if req.pets_allowed and not dest.pets_allowed:
-        reasons.append("PETS_NOT_ALLOWED")
-    if req.service_animal and not dest.service_animal_ok:
-        reasons.append("SERVICE_ANIMAL_NOT_ACCOMMODATED")
-    if req.oxygen_friendly and not dest.oxygen_friendly:
-        reasons.append("NOT_OXYGEN_FRIENDLY")
+    if _expired(offer.valid_until, now):
+        reasons.append("OFFER_EXPIRED")
+    if offer.beds_available < req.capacity_needed:
+        reasons.append("NO_BEDS_AVAILABLE")
+    checks = [
+        (req.step_free_entry, offer.step_free_entry, "step_free_entry", "NOT_STEP_FREE"),
+        (req.accessible_restroom, offer.accessible_restroom, "accessible_restroom", "NO_ACCESSIBLE_RESTROOM"),
+        (req.pets_allowed, offer.pets_allowed, "pets_allowed", "PETS_NOT_ALLOWED"),
+        (req.service_animal, offer.service_animals_allowed, "service_animals_allowed",
+         "SERVICE_ANIMAL_NOT_ACCOMMODATED"),
+        (req.oxygen_friendly, offer.oxygen_power_outlets, "oxygen_power_outlets", "NO_OXYGEN_POWER"),
+    ]
+    for needed, has, ok_code, bad_code in checks:
+        if needed:
+            (match if has else reasons).append(ok_code if has else bad_code)
+
     distance = None
-    if not graph.is_active_order(pickup_zone):
-        route = check_route(graph, pickup_zone, dest.zone_id)
-        if route.ok:
-            distance = route.distance_km
+    if rule == ZoneRule.OUTSIDE_ACTIVE_ORDER:
+        if not dest_zone:
+            reasons.append("DESTINATION_LOCATION_UNKNOWN")
         else:
-            reasons.append(route.reason)
-    return reasons, distance
+            route = check_route(graph, location, dest_zone)
+            if route.ok:
+                distance = route.distance_km
+                match.append("route_avoids_closed_roads")
+            else:
+                reasons.append(route.reason)
+    if not reasons:
+        match.append("provider_approved")
+    return reasons, match, distance
 
 
 def _rank(offers: list[Offer]) -> list[Offer]:
-    # Eligible first, then shortest fictional route; provider_id breaks ties.
-    return sorted(offers, key=lambda o: (not o.eligible,
-                                         o.estimated_distance_km if o.estimated_distance_km is not None else 1e9,
-                                         o.provider_id))
+    def key(o: Offer):
+        return (not o.eligible,
+                o.eta_minutes if o.eta_minutes is not None else 10**6,
+                o.estimated_distance_km if o.estimated_distance_km is not None else 1e9,
+                o.offer_id)
+
+    ranked = sorted(offers, key=key)
+    n = 0
+    for o in ranked:
+        if o.eligible:
+            n += 1
+            o.rank = n
+    return ranked
 
 
-def _offer(request: ServiceRequest, provider_id: str, reasons: list[str], distance: float | None,
-           make_id: Callable[[str], str] | None) -> Offer:
-    kwargs = {"offer_id": make_id(provider_id)} if make_id else {}
-    return Offer(
-        request_id=request.request_id,
-        case_id=request.case_id,
-        provider_id=provider_id,
-        service_type=request.service_type,
-        eligible=not reasons,
-        reasons=reasons or ["MEETS_ALL_HARD_CONSTRAINTS"],
-        estimated_distance_km=distance,
-        **kwargs,
-    )
+def evaluate_transport_offers(case_id: str, request_id: str, req: TransportRequirements, zone_id: str,
+                              sector_id: Optional[str], offers: list[TransportOfferIn],
+                              registry: dict[str, ProviderRegistration], graph: ZoneGraph,
+                              now: Optional[datetime] = None) -> list[Offer]:
+    out = []
+    for raw in offers:
+        reasons, match, km = evaluate_transport(req, zone_id, sector_id, raw, registry.get(raw.provider_id),
+                                                graph, now)
+        out.append(Offer(offer_id=raw.offer_id, request_id=request_id, case_id=case_id,
+                         provider_id=raw.provider_id, service_type=TRANSPORT, eligible=not reasons,
+                         reasons=reasons, match_reasons=match if not reasons else [],
+                         eta_minutes=raw.eta_minutes, estimated_distance_km=km, raw=raw.model_dump()))
+    return _rank(out)
 
 
-def find_transport(request: ServiceRequest, providers: list[TransportProvider], graph: ZoneGraph,
-                   make_id: Callable[[str], str] | None = None) -> list[Offer]:
-    assert request.service_type == ServiceType.ACCESSIBLE_TRANSPORT
-    req = request.transport_requirements or TransportRequirements()
-    offers = []
-    for p in providers:
-        reasons, distance = evaluate_transport(req, request.zone_id, p, graph)
-        offers.append(_offer(request, p.provider_id, reasons, distance, make_id))
-    return _rank(offers)
-
-
-def find_destination(request: ServiceRequest, destinations: list[Destination], graph: ZoneGraph,
-                     make_id: Callable[[str], str] | None = None) -> list[Offer]:
-    assert request.service_type == ServiceType.ACCESSIBLE_DESTINATION
-    req = request.destination_requirements or DestinationRequirements()
-    offers = []
-    for d in destinations:
-        reasons, distance = evaluate_destination(req, request.zone_id, d, graph)
-        offers.append(_offer(request, d.provider_id, reasons, distance, make_id))
-    return _rank(offers)
+def evaluate_destination_offers(case_id: str, request_id: str, req: DestinationRequirements, zone_id: str,
+                                sector_id: Optional[str], offers: list[DestinationOfferIn],
+                                registry: dict[str, ProviderRegistration], graph: ZoneGraph,
+                                now: Optional[datetime] = None) -> list[Offer]:
+    out = []
+    for raw in offers:
+        reasons, match, km = evaluate_destination(req, zone_id, sector_id, raw, registry.get(raw.provider_id),
+                                                  graph, now)
+        out.append(Offer(offer_id=raw.offer_id, request_id=request_id, case_id=case_id,
+                         provider_id=raw.provider_id, service_type=DESTINATION, eligible=not reasons,
+                         reasons=reasons, match_reasons=match if not reasons else [],
+                         estimated_distance_km=km, raw=raw.model_dump()))
+    return _rank(out)

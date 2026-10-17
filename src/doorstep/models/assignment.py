@@ -32,6 +32,8 @@ class Assignment(DoorstepModel):
     provider_response: ProviderResponse = ProviderResponse.PENDING
     status: ServiceStatus = ServiceStatus.PROPOSED
     idempotency_key: str
+    # A proposal can pair transport + destination; each is its own row, linked.
+    linked_assignment_id: Optional[str] = None
     confirmed_pickup_at: Optional[str] = None
     confirmed_arrival_at: Optional[str] = None
     correlation_id: str = ""

@@ -12,9 +12,11 @@ from .events import (
     StatusEvent,
     VerificationEvent,
 )
-from .provider import Destination, Organization, TransportProvider, VehicleCapability
+from .provider import Organization, ProviderRegistration
 from .requests import (
+    DestinationOfferIn,
     DestinationRequirements,
+    TransportOfferIn,
     Offer,
     ServiceRequest,
     TransportRequirements,

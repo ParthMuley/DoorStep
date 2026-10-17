@@ -47,9 +47,8 @@ def recovery_payload(case: Case) -> dict:
                               reasons=["CONSENT_SHARE_RECOVERY_NEEDS_MISSING"])
     n = case.needs
     return {
-        "case_id": case.case_id,
         "preferred_language": n.preferred_language,
-        "wheelchair_accessible": n.wheelchair_accessible_vehicle,
+        "wheelchair_accessible_vehicle": n.wheelchair_accessible_vehicle,
         "destination_accessibility": list(n.destination_accessibility),
         "pet_count": n.pet_count,
         "service_animal": n.service_animal,

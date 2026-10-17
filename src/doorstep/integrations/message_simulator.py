@@ -14,7 +14,7 @@ from doorstep.services.db import Database
 from doorstep.services.errors import Conflict
 from doorstep.services.store import Store
 
-DEMO_SENDER = "sms:+15555550199"  # fictional Doorstep demo number
+DEMO_SENDER = "sim_doorstep_demo"  # simulator id for Doorstep outbound
 MAX_OUTBOUND_PER_CASE = 25  # simple rate limit for the demo
 
 
@@ -51,7 +51,7 @@ class MessageSimulator:
     def record_inbound(self, *, case_id: Optional[str], sender: str, body: str, language: str,
                        external_id: str, correlation_id: str = "") -> MessageEvent:
         msg = MessageEvent(
-            message_id=self.db.next_id("msg"),
+            message_id=self.db.next_id("resp"),
             case_id=case_id,
             direction=MessageDirection.INBOUND,
             channel=self.channel,

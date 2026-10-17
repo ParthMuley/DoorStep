@@ -1,96 +1,70 @@
 # Developer B handoff notes: domain engine + backend
 
-Everything is synthetic and labeled DEMO. No real SMS, 911, or dispatch.
+Implements `docs/interface-contract.md` **v1.0** (Section 3). Everything is synthetic and labeled DEMO. No real SMS, 911, or dispatch.
 
 ## Run
 
 ```bash
-scripts/run_backend.sh            # http://127.0.0.1:8000, DB at var/doorstep_demo.db (auto-seeded)
-scripts/reset_demo.sh             # deterministic reset (API if running, else reseeds the DB file)
-scripts/smoke_test.sh             # temp backend + Scenario A and B over HTTP
-PYTHONPATH=src .venv/bin/python -m pytest tests/unit -q
+scripts/run_backend.sh            # http://127.0.0.1:$DOORSTEP_API_PORT (default 8000); auto-seeds var/doorstep_demo.db
+scripts/reset_demo.sh             # deterministic reset (via the API if running, else reseeds the DB file)
+scripts/smoke_test.sh             # temp backend + Scenario A and B over real HTTP
+PYTHONPATH=src python -m pytest tests/unit -q
 ```
 
-Env: `SIMULATION_MODE=true` (required), `DOORSTEP_DEMO_TOKEN`, `DOORSTEP_DB_PATH`, `DOORSTEP_API_URL`.
-Dependencies to add to `pyproject.toml` (owned by A): `fastapi`, `uvicorn`, `pydantic>=2`, `httpx`; dev: `pytest`.
-No other third-party packages are used.
+Scripts load `.env` when it exists. Variables used: `SIMULATION_MODE=true` (required), `DEMO_AUTH_TOKEN`, `DOORSTEP_API_PORT`, `DOORSTEP_API_URL`, optional `DOORSTEP_DB_PATH`. Tested on Python 3.11 and 3.14. Only `fastapi`, `uvicorn`, `pydantic`, `httpx` and `pytest` are used, and all are already in `pyproject.toml`.
 
-All routes except `/health` need the header `X-Demo-Token: <token>`.
+## Contract v1.0 conformance
 
-## Contract operations → HTTP
+- Paths, request bodies, response fields, status codes (201 on create, 200 on a repeated idempotency key) and error codes all follow Section 3.
+- Write endpoints need `Authorization: Bearer $DEMO_AUTH_TOKEN`. GET endpoints are open.
+- `X-Correlation-ID` takes precedence over a `correlation_id` in the body. It is echoed in every response body and response header, and stored on every timeline event.
+- Every response carries `schema_version: "1.0"`. Errors look like `{schema_version, error, detail, correlation_id}`, plus `reasons[]` with the specific rule codes.
+- Business-rule refusals are **409**: `UNSAFE_ZONE`, `PROVIDER_NOT_APPROVED`, `OFFER_NOT_ELIGIBLE`, `CONSENT_MISSING`, `INVALID_TRANSITION`, `NOT_AUTHORIZED`, `NEEDS_NOT_CONFIRMED`. Others: 401 (bad token), 403 (wrong identity / unknown sender), 404, 422 `VALIDATION_ERROR` (unknown or invalid fields).
 
-| Operation | Method + path | Body |
-|---|---|---|
-| `start_demo_warning` | `POST /demo/warnings` | `{zone_id, scenario_id?, correlation_id?}` |
-| (user report, never activates) | `POST /reports` | `{zone_id, text}` |
-| `register_resident` | `POST /residents` | `{profile: Resident, consent?: Consent}` |
-| `submit_resident_response` | `POST /cases/{case_id}/responses` | `{text, sender, language?, external_id?}` |
-| confirm needs (API alternative to SMS YES/NO) | `POST /cases/{case_id}/needs/confirm` | `{confirmed, confirmed_by, needs?}` |
-| `find_transport` | `POST /transport/find` | `{case_id}` |
-| `find_destination` | `POST /destinations/find` | `{case_id}` |
-| `propose_assignment` | `POST /assignments/propose` | `{case_id, offer_id}` |
-| `accept_assignment` | `POST /assignments/{id}/respond` | `{provider_id, accept: true\|false}` |
-| pickup details (approved and accepted provider only) | `GET /assignments/{id}/pickup-details?provider_id=` | - |
-| `confirm_pickup` | `POST /assignments/{id}/pickup` | `{evidence: {confirmations: [{party, party_id}]}}` |
-| `confirm_arrival` | `POST /assignments/{id}/arrival` | same |
-| `request_recovery_handoff` | `POST /cases/{case_id}/recovery` | `{consent, granted_by}` |
-| recovery provider response (simulated) | `POST /recovery/{referral_id}/respond` | `{provider_id, accept}` |
-| `escalate_case` | `POST /cases/{case_id}/escalate` | `{reason}` (`ACTIVE_EVACUATION_ORDER_ZONE`, `NO_ELIGIBLE_PROVIDER`, `PROVIDER_TIMEOUT`, `COORDINATOR_REQUESTED`) |
-| `get_case_status` | `GET /cases/{case_id}` | - |
-| list / unresolved queue | `GET /cases?status=&unresolved=true` | - |
-| reset | `POST /demo/reset` | - |
-| provider inventories, zone graph | `GET /providers`, `GET /zones` | - |
+## Behaviour A should know about
 
-Every write accepts an optional `correlation_id`. If it is omitted, the case's own ID (`corr_<case_id>`) is used. Every timeline event carries it, so A can pass the Sentry trace ID through.
+1. **Needs must be confirmed first.** `.../evaluate` returns 409 `NEEDS_NOT_CONFIRMED` until the resident replies SI/YES to the confirmation question.
+2. **Approval and location come from B's registry**, not from the offer. An unknown `provider_id` gets `PROVIDER_NOT_APPROVED`. The route (closed-road check) starts from the registry's base zone. An offer's optional `base_zone` is used only when the registry has none.
+3. **Offers are re-checked at proposal time** for expiry (`valid_until`), approval, zone and consent. A stale or expired offer gets 409.
+4. **One proposal, two providers.** `POST /cases/{id}/assignments` with both `transport_offer_id` and `destination_offer_id` returns one `assignment_id`. **Both providers respond on that same id** through `/acceptance`, each with its own `provider_id`. Arrival requires the destination provider to have **ACCEPTED**: the spec forbids treating space as confirmed without acceptance.
+5. **Pickup evidence:** `provider_confirmed` and (`resident_confirmed` or `caregiver_confirmed`). **Arrival evidence:** a `DESTINATION_CHECKIN` whose `destination_provider_id` matches the accepted destination, or resident plus transport provider. The optional `confirmations: [{party, party_id}]` list (proposed for v1.1) is checked against the real participants, and a mismatch is rejected.
+6. **Recovery without consent** returns 409 `CONSENT_MISSING`. The decline is still recorded and nothing is shared. `granted_by` is `RESIDENT` or `CAREGIVER`.
+7. **Escalation reasons:** `ACTIVE_EVACUATION_ORDER_ZONE` (the case must actually be inside an order zone), `NO_ELIGIBLE_PROVIDER`, `PROVIDER_TIMEOUT`, `NO_REPLY_AFTER_DEADLINE` (communication status must be `NO_REPLY_AFTER_DEADLINE`), `COORDINATOR_REQUESTED`. Acknowledgment is always `assistance_confirmed: false`.
+8. **Extra fields in `GET /cases/{id}`**, beyond v1.0 and safe to ignore: `sector_id`, `needs`, `destination_assignment`, `map{color,label}`, `unresolved`, `next_step`, `evidence{...}`, and **`summary_text`**, a plain-text, evidence-backed status that can be shown directly in ASI:One. Other responses also include `next_step` and `duplicate` where useful.
+9. **`submit_resident_response`** accepts an optional `external_id` (or `idempotency_key`). Resending the same value is ignored as a duplicate.
 
-Errors: `{"error": code, "message", "reasons": [...]}` with 401 (token), 403 (wrong identity), 404, 409 (conflict, late reply, invalid transition), 422 (safety rejection, missing consent, insufficient evidence).
+## Extras (B's test hooks, not in the contract)
 
-`GET /cases/{id}` returns `case`, `map{color,label}`, `evidence{provider_accepted,pickup_confirmed,arrival_confirmed,destination_accepted,timeline_replay_matches_status}`, `unresolved`, `next_step`, `offers`, `assignments`, `verifications`, `escalations`, `recovery_referrals`, `messages`, `timeline`. It also returns **`summary_text`**, a plain-text, evidence-backed summary that can serve as the ASI:One text fallback.
-
-## Message simulator injection
-
-| Inject | Path |
+| Purpose | Endpoint |
 |---|---|
-| inbound SMS routed by sender (unknown sender → 403, no change) | `POST /sim/inbound {sender, text, external_id?}` |
+| recovery provider response (simulated) | `POST /recovery-referrals/{referral_id}/response {provider_id:"recovery_org_demo", decision}` |
+| pickup point lookup (accepted, approved provider only) | `GET /assignments/{id}/pickup-details?provider_id=` (token required) |
+| inbound SMS routed by sender | `POST /sim/inbound {sender, text, external_id?}` |
 | delivery receipt / failure | `POST /sim/delivery {message_id, delivered}` |
 | reply deadline passed | `POST /sim/cases/{case_id}/no-reply-deadline` |
-| escalation service stops acknowledging | `POST /sim/escalation-ack {acknowledge: false}` |
-| outbox | `GET /sim/messages?case_id=` |
-| duplicate reply | resend the same `external_id` |
-| provider decline | `POST /assignments/{id}/respond {accept: false}` |
+| escalation service stops acknowledging | `POST /sim/escalation-ack {acknowledge:false}` |
+| outbox, registry, zone graph | `GET /sim/messages?case_id=`, `GET /providers`, `GET /zones` |
 
-## Seed (fictional)
+## Seed (fictional; matches contract Section 5)
 
-- `case_maria_001` / `resident_001`, phone `sms:+15555550101`, zone_3, Spanish, wheelchair, transfer help, 1 dog, step-free destination.
-- `case_david_002` / `resident_002`, phone `sms:+15555550102`, caregiver `caregiver_002` (`sms:+15555550103`), zone_3n (active order), transfer help, oxygen.
-- Transport: `transport_org_a` (match), `_b` closer sedan, not accessible; `_c` not approved; `_d` no pets; `_e` eligible alternate behind a closed road.
-- Destinations: `dest_center_a` (match), `dest_library_b` not step-free, `dest_hotel_c` no pets.
+- `case_maria_001` / `resident_001` "Maria (synthetic)": sender `sim_phone_maria`, `zone_3` sector B (outside the order), Spanish, wheelchair, transfer help, 1 dog, step-free destination.
+- `case_david_002` / `resident_002` "David (synthetic)": sender `sim_phone_david`, caregiver `sim_phone_david_caregiver`, `zone_3` sector A (**active order**), wheelchair.
+- Registry: `transport_org_a` (approved, base zone_2), `transport_org_b` (approved, closer sedan), `transport_org_c` (**not approved**), `transport_org_d`, `transport_org_e` (based behind a closed road); `destination_org_a/b/c`.
+- Sample raw offers in A's format: `doorstep.demo.seed.transport_offers()` / `destination_offers()` (`offer_t_001..005`, `offer_d_001..003`). A's agent fixtures can mirror these.
 
-## Pure functions for A's provider agents
+Expected for Maria: eligible `offer_t_001` (rank 1) and `offer_t_005` (rank 2, detour). Rejected: `offer_t_002` (`NOT_WHEELCHAIR_ACCESSIBLE`, `NO_TRANSFER_ASSISTANCE`), `offer_t_003` (`PROVIDER_NOT_APPROVED`), `offer_t_004` (`PETS_NOT_ALLOWED`). Destination: `offer_d_001`.
+Expected for David: every offer rejected with `ACTIVE_ORDER_ZONE`, `escalation_required: true`, and proposal returns 409 `UNSAFE_ZONE`.
 
-Provider agents can keep their own inventories and still use the same rules:
-`doorstep.services.matching.find_transport(request, providers, graph)` / `find_destination(...)` with
-`doorstep.demo.synthetic_zone_graph.build_demo_graph()`. The backend re-checks every proposal against current state.
+## Proposed contract v1.1 (needs A's approval)
 
-## Example: Maria transport offers (abridged)
-
-```json
-{"request": {"request_id": "req_001", "case_id": "case_maria_001", "service_type": "accessible_transport",
-             "status": "PROPOSED", "idempotency_key": "case_maria_001:transport:v1"},
- "eligible_count": 2,
- "offers": [
-  {"offer_id": "offer_req_001_transport_org_a", "provider_id": "transport_org_a", "eligible": true,
-   "reasons": ["MEETS_ALL_HARD_CONSTRAINTS"], "estimated_distance_km": 4.0},
-  {"offer_id": "offer_req_001_transport_org_e", "provider_id": "transport_org_e", "eligible": true,
-   "reasons": ["MEETS_ALL_HARD_CONSTRAINTS"], "estimated_distance_km": 11.0},
-  {"offer_id": "offer_req_001_transport_org_b", "provider_id": "transport_org_b", "eligible": false,
-   "reasons": ["NOT_WHEELCHAIR_ACCESSIBLE", "NO_TRANSFER_ASSISTANCE"], "estimated_distance_km": 0.0}],
- "route_note": "Illustrative route on a fictional graph; not a safety assessment."}
-```
+1. Evidence may include `confirmations: [{party, party_id}]`. Already accepted, and checked when present.
+2. Transport offers may include `base_zone`. Already accepted, but the registry value wins.
+3. Approval comes from B's registry only (already how it works).
+4. The destination provider accepts through `/assignments/{id}/acceptance` with its own `provider_id` (needed before arrival).
 
 ## Known limitations
 
-- Spanish templates still need review by a fluent speaker (decision B-14).
-- No one-time pickup codes yet. Evidence is party confirmations only.
-- Token auth is demo gating only.
-- Sentry API logs are not added yet (P1).
+- Spanish templates still need review by a fluent speaker.
+- No one-time pickup codes beyond the `code_verified` flag.
+- Bearer token is demo gating only.
+- No Sentry on the backend yet.

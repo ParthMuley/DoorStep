@@ -79,27 +79,28 @@ def _e(a: str, b: str) -> frozenset[str]:
 def build_demo_graph() -> ZoneGraph:
     """Fresh copy of the fictional demo graph.
 
-    zone_3   -- simulated WARNING area (Maria). Outside any active order.
-    zone_3n  -- inside zone_3's warning area, ACTIVE simulated evacuation order (David).
-    zone_2   -- transport depot area.        zone_4 -- nearby area.
-    zone_5   -- accessible community center area.
-    Edge zone_3 <-> zone_4 is CLOSED (simulated road closure).
+    zone_3            -- simulated WARNING area (a label; residents live in its sectors).
+    zone_3_sector_b   -- Maria. Outside any active order.
+    zone_3_sector_a   -- David. ACTIVE simulated evacuation order.
+    zone_2 depot area, zone_4 nearby area, zone_5 community-center area.
+    Edge zone_3_sector_b <-> zone_4 is CLOSED (simulated road closure).
     """
     zones = {
         "zone_2": Zone("zone_2", "Zone 2 (DEMO depot area)"),
         "zone_3": Zone("zone_3", "Zone 3 (DEMO warning area)"),
-        "zone_3n": Zone("zone_3n", "Zone 3 North (DEMO active order)", parent_zone="zone_3",
-                        active_evacuation_order=True),
+        "zone_3_sector_a": Zone("zone_3_sector_a", "Zone 3 Sector A (DEMO active order)", parent_zone="zone_3",
+                                active_evacuation_order=True),
+        "zone_3_sector_b": Zone("zone_3_sector_b", "Zone 3 Sector B (DEMO)", parent_zone="zone_3"),
         "zone_4": Zone("zone_4", "Zone 4 (DEMO)"),
         "zone_5": Zone("zone_5", "Zone 5 (DEMO community center area)"),
     }
     edges = {
-        _e("zone_2", "zone_3"): 4.0,
-        _e("zone_3", "zone_3n"): 1.5,
-        _e("zone_3", "zone_4"): 1.0,
+        _e("zone_2", "zone_3_sector_b"): 4.0,
+        _e("zone_3_sector_b", "zone_3_sector_a"): 1.5,
+        _e("zone_3_sector_b", "zone_4"): 1.0,
         _e("zone_4", "zone_5"): 2.0,
         _e("zone_2", "zone_5"): 5.0,
-        _e("zone_3n", "zone_4"): 2.0,
+        _e("zone_3_sector_a", "zone_4"): 2.0,
     }
-    closed = {_e("zone_3", "zone_4")}
+    closed = {_e("zone_3_sector_b", "zone_4")}
     return ZoneGraph(zones=zones, edges=edges, closed_edges=closed)

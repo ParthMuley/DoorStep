@@ -67,6 +67,7 @@ class ServiceType(str, Enum):
 class ZoneRule(str, Enum):
     OUTSIDE_ACTIVE_ORDER = "OUTSIDE_ACTIVE_ORDER"
     INSIDE_ACTIVE_ORDER = "INSIDE_ACTIVE_ORDER"
+    UNVERIFIED = "UNVERIFIED"
 
 
 class ProviderResponse(str, Enum):
@@ -77,6 +78,7 @@ class ProviderResponse(str, Enum):
 
 class EscalationStatus(str, Enum):
     # A simulated acknowledgment means ONLY "request received" -- never dispatch.
+    REQUESTED = "REQUESTED"
     ACKNOWLEDGED_REQUEST_ONLY = "ACKNOWLEDGED_REQUEST_ONLY"
     NO_ACKNOWLEDGMENT = "NO_ACKNOWLEDGMENT"
 
@@ -124,6 +126,7 @@ class EscalationReason(str, Enum):
     ACTIVE_EVACUATION_ORDER_ZONE = "ACTIVE_EVACUATION_ORDER_ZONE"
     NO_ELIGIBLE_PROVIDER = "NO_ELIGIBLE_PROVIDER"
     PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT"
+    NO_REPLY_AFTER_DEADLINE = "NO_REPLY_AFTER_DEADLINE"
     COORDINATOR_REQUESTED = "COORDINATOR_REQUESTED"
 
 

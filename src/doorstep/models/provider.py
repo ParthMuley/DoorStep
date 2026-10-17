@@ -1,54 +1,26 @@
-"""Provider, vehicle capability, and destination models (synthetic inventories).
+"""Partner-organization provider registry (synthetic).
 
-Providers are preapproved by a fictional partner organization -- NOT verified by
-an LLM. Each provider agent keeps its own inventory; the coordinator DB never
-stores provider-private rows.
+Provider agents (Developer A) own their own inventories and send raw offers.
+Developer B owns this registry: which providers the fictional partner
+organization has PREAPPROVED, and where each one is based. Approval is never
+taken from an offer's own claims and is never decided by an LLM.
 """
 
 from __future__ import annotations
 
-from pydantic import Field
+from typing import Optional
 
 from .common import DoorstepModel, ServiceType
 
 
-class VehicleCapability(DoorstepModel):
-    wheelchair_accessible: bool = False
-    transfer_assistance: bool = False
-    oxygen_equipment_handling: bool = False
-    seating_capacity: int = 0
-    pet_capacity: int = 0
-    service_animal_ok: bool = False
-
-
-class TransportProvider(DoorstepModel):
+class ProviderRegistration(DoorstepModel):
     provider_id: str
     display_name: str
-    service_type: ServiceType = ServiceType.ACCESSIBLE_TRANSPORT
-    approved: bool = True  # preapproved by fictional partner org
-    service_area_zones: list[str] = Field(default_factory=list)
-    # Zones this provider will NOT enter (e.g. active evacuation-order zones).
-    restricted_zones: list[str] = Field(default_factory=list)
-    vehicle: VehicleCapability = Field(default_factory=VehicleCapability)
-    base_zone: str = ""  # synthetic graph node the vehicle starts from
-    available: bool = True
-    available_trips: int = 1  # capacity: trips it can still accept
-    simulated: bool = True
-
-
-class Destination(DoorstepModel):
-    provider_id: str
-    display_name: str
-    service_type: ServiceType = ServiceType.ACCESSIBLE_DESTINATION
-    approved: bool = True
-    zone_id: str = ""  # where the destination physically sits
-    step_free_entry: bool = False
-    accessible_restroom: bool = False
-    pets_allowed: bool = False
-    service_animal_ok: bool = True
-    oxygen_friendly: bool = False
-    total_capacity: int = 0
-    available_capacity: int = 0
+    service_type: ServiceType
+    organization_id: str
+    approved: bool = True  # preapproved by the fictional partner org
+    # Transport: depot zone (route start). Destination: where it physically sits.
+    base_zone: Optional[str] = None
     simulated: bool = True
 
 

@@ -33,7 +33,7 @@ class Consent(DoorstepModel):
 class Caregiver(DoorstepModel):
     caregiver_id: str
     display_name: str
-    contact_channel: str  # synthetic, e.g. "sms:+1555..."
+    contact_channel: str  # simulator sender id, e.g. "sim_phone_maria"
 
 
 class Resident(DoorstepModel):
@@ -41,6 +41,7 @@ class Resident(DoorstepModel):
 
     resident_id: str
     zone_id: str
+    sector_id: Optional[str] = None  # synthetic graph node inside zone_id
     display_name: str  # synthetic label, not a real identity
     preferred_language: Language = Language.EN
     contact_channel: str  # synthetic phone/channel

@@ -25,7 +25,10 @@ class RouteCheck:
     reason: str = ""
 
 
-def zone_rule(graph: ZoneGraph, zone_id: str) -> ZoneRule:
+def zone_rule(graph: ZoneGraph, zone_id: str | None) -> ZoneRule:
+    """Unknown location fails closed as UNVERIFIED (blocks ordinary assignment)."""
+    if not zone_id or zone_id not in graph.zones:
+        return ZoneRule.UNVERIFIED
     return ZoneRule.INSIDE_ACTIVE_ORDER if graph.is_active_order(zone_id) else ZoneRule.OUTSIDE_ACTIVE_ORDER
 
 

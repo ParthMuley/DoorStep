@@ -1,88 +1,109 @@
-"""Request bodies for the HTTP contract (Pydantic-validated)."""
+"""Request bodies for docs/interface-contract.md v1.0. Unknown fields are rejected."""
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
-from doorstep.models import Consent, DoorstepModel, EscalationReason, Evidence, Language, Needs, Resident
+from doorstep.models import (
+    Consent,
+    DestinationOfferIn,
+    DoorstepModel,
+    EscalationReason,
+    Evidence,
+    Language,
+    Resident,
+    TransportOfferIn,
+)
 
 
-class WarningBody(DoorstepModel):
-    zone_id: str
-    scenario_id: Optional[str] = None
+class Body(DoorstepModel):
+    schema_version: str = "1.0"
     correlation_id: Optional[str] = None
 
 
-class ReportBody(DoorstepModel):
+class WarningBody(Body):
     zone_id: str
-    text: str
-    reporter: str = "public"
+    scenario_id: Optional[str] = None
+    alert_source: str = "SIMULATED_OFFICIAL"
 
 
-class RegisterResidentBody(DoorstepModel):
+class RegisterResidentBody(Body):
     profile: Resident
     consent: Optional[Consent] = None
 
 
-class ResponseBody(DoorstepModel):
+class ResponseBody(Body):
     text: str
-    sender: str  # must be the resident's or caregiver's synthetic channel
+    sender: str
     language: Optional[Language] = None
-    external_id: Optional[str] = None  # inbound dedup key
-    correlation_id: Optional[str] = None
+    # Optional dedup key for repeated deliveries of the same inbound message.
+    external_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
-class ConfirmNeedsBody(DoorstepModel):
-    confirmed: bool
-    confirmed_by: str  # resident_id or caregiver_id
-    needs: Optional[Needs] = None
-    correlation_id: Optional[str] = None
+class TransportEvaluateBody(Body):
+    request_id: Optional[str] = None
+    service_type: Literal["accessible_transport"] = "accessible_transport"
+    candidate_offers: list[TransportOfferIn]
 
 
-class FindBody(DoorstepModel):
-    case_id: str
-    correlation_id: Optional[str] = None
+class DestinationEvaluateBody(Body):
+    request_id: Optional[str] = None
+    service_type: Literal["accessible_destination"] = "accessible_destination"
+    candidate_offers: list[DestinationOfferIn]
 
 
-class ProposeBody(DoorstepModel):
-    case_id: str
-    offer_id: str
-    correlation_id: Optional[str] = None
+class ProposeBody(Body):
+    transport_offer_id: Optional[str] = None
+    destination_offer_id: Optional[str] = None
+    authorization: str = "SIMULATED_PREAPPROVED"
+    idempotency_key: Optional[str] = None
 
 
-class ProviderResponseBody(DoorstepModel):
+class AcceptanceBody(Body):
     provider_id: str
-    accept: bool = True
-    correlation_id: Optional[str] = None
+    provider_agent_address: Optional[str] = None
+    decision: Literal["ACCEPTED", "DECLINED"]
+    idempotency_key: Optional[str] = None
 
 
-class EvidenceBody(DoorstepModel):
+class EvidenceBody(Body):
     evidence: Evidence
-    correlation_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
-class RecoveryBody(DoorstepModel):
-    consent: bool
-    granted_by: str  # resident_id or caregiver_id
-    correlation_id: Optional[str] = None
+class RecoveryConsent(DoorstepModel):
+    share_recovery_needs: bool
+    granted_by: str  # "RESIDENT" | "CAREGIVER" (or the party id)
+    granted_at: Optional[str] = None
 
 
-class EscalateBody(DoorstepModel):
+class RecoveryBody(Body):
+    consent: RecoveryConsent
+    idempotency_key: Optional[str] = None
+
+
+class RecoveryResponseBody(Body):
+    provider_id: str
+    decision: Literal["ACCEPTED", "DECLINED"]
+
+
+class EscalateBody(Body):
     reason: EscalationReason
-    correlation_id: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
-class InboundSmsBody(DoorstepModel):
+class InboundSmsBody(Body):
     sender: str
     text: str
     external_id: Optional[str] = None
     language: Optional[Language] = None
 
 
-class DeliveryBody(DoorstepModel):
+class DeliveryBody(Body):
     message_id: str
     delivered: bool
 
 
-class EscalationAckBody(DoorstepModel):
+class EscalationAckBody(Body):
     acknowledge: bool
