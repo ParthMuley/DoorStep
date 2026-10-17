@@ -31,7 +31,8 @@ Scripts load `.env` when it exists. Variables used: `SIMULATION_MODE=true` (requ
 6. **Recovery without consent** returns 409 `CONSENT_MISSING`. The decline is still recorded and nothing is shared. `granted_by` is `RESIDENT` or `CAREGIVER`.
 7. **Escalation reasons:** `ACTIVE_EVACUATION_ORDER_ZONE` (the case must actually be inside an order zone), `NO_ELIGIBLE_PROVIDER`, `PROVIDER_TIMEOUT`, `NO_REPLY_AFTER_DEADLINE` (communication status must be `NO_REPLY_AFTER_DEADLINE`), `COORDINATOR_REQUESTED`. Acknowledgment is always `assistance_confirmed: false`.
 8. **Extra fields in `GET /cases/{id}`**, beyond v1.0 and safe to ignore: `sector_id`, `needs`, `destination_assignment`, `map{color,label}`, `unresolved`, `next_step`, `evidence{...}`, and **`summary_text`**, a plain-text, evidence-backed status that can be shown directly in ASI:One. Other responses also include `next_step` and `duplicate` where useful.
-9. **`submit_resident_response`** accepts an optional `external_id` (or `idempotency_key`). Resending the same value is ignored as a duplicate.
+9. **Extra fields in raw offers are ignored, not trusted.** Your agents' `approved_by_partner`, `base_node`, `org_name`, `accepts_requests` and `valid_for_minutes` are accepted and dropped. Please send **`valid_until`** (absolute UTC time) so expiry is enforced, and `eta_minutes` if you want ETA ranking (without it, offers are ranked by fictional route distance). Checked against your real fixtures: Maria gets `transport_org_a` (then `_e`) and `destination_org_a`; David gets nothing eligible and `escalation_required: true`.
+10. **`submit_resident_response`** accepts an optional `external_id` (or `idempotency_key`). Resending the same value is ignored as a duplicate.
 
 ## Extras (B's test hooks, not in the contract)
 
