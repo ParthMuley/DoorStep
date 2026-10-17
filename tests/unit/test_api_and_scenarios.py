@@ -94,3 +94,19 @@ def test_persisted_state_survives_restart(tmp_path):
     restarted = DoorstepService(Database(path))
     assert restarted.store.get_case("case_maria_001").resident_status == "PROVIDER_ACCEPTED"
     assert restarted.respond_assignment(aid, "transport_org_a", "ACCEPTED")["duplicate"] is True
+
+
+def test_offers_in_developer_a_agent_format_are_accepted_but_not_trusted(client):
+    """A's provider agents add fields like approved_by_partner/base_node. They are ignored:
+    an unapproved provider claiming approval is still rejected via B's registry."""
+    from doorstep.demo import seed
+
+    offers = [{**o, "approved_by_partner": True, "base_node": "node_depot_east", "org_name": "x (fictional)",
+               "accepts_requests": True, "valid_for_minutes": 30} for o in seed.transport_offers()]
+    client.post("/demo/warnings", json={"zone_id": "zone_3"})
+    client.post("/cases/case_maria_001/responses", json={"text": "1", "sender": seed.MARIA_SENDER})
+    client.post("/cases/case_maria_001/responses", json={"text": "SI", "sender": seed.MARIA_SENDER})
+    r = client.post("/cases/case_maria_001/transport/evaluate", json={"request_id": "r1", "candidate_offers": offers})
+    assert r.status_code == 200, r.text
+    rejected = {x["provider_id"]: x["reasons"] for x in r.json()["rejected"]}
+    assert "PROVIDER_NOT_APPROVED" in rejected["transport_org_c"]
