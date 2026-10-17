@@ -13,6 +13,10 @@ inventory = load_inventory("transport_inventory.json", "vehicles")
 transport_proto = build_provider_protocol("accessible_transport", inventory)
 
 if __name__ == "__main__":
-    agent = build_provider_agent("doorstep_transport_provider", "TRANSPORT_SEED", "TRANSPORT_PORT", 8102)
+    agent = build_provider_agent(
+        "doorstep_transport_provider", "TRANSPORT_SEED", "TRANSPORT_PORT", 8102,
+        profile="transport_provider.md",
+        description="DOORSTEP DEMO: simulated accessible-transport provider with fictional vehicles.",
+    )
     agent.include(transport_proto, publish_manifest=True)
     agent.run()

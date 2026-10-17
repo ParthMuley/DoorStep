@@ -13,6 +13,7 @@ from typing import Any
 
 from uagents import Agent, Context, Protocol
 
+from doorstep.integrations.agentverse_setup import agentverse_api_key, enable_auto_mailbox
 from doorstep.integrations.fetch_adapter import (
     AcceptRequest,
     AcceptResponse,
@@ -94,13 +95,21 @@ def build_provider_protocol(role: ServiceType, inventory: list[dict[str, Any]]) 
     return proto
 
 
-def build_provider_agent(name: str, seed_env: str, port_env: str, default_port: int) -> Agent:
+def build_provider_agent(
+    name: str, seed_env: str, port_env: str, default_port: int, profile: str, description: str
+) -> Agent:
     seed = os.getenv(seed_env, "").strip()
     if not seed:
         raise SystemExit(f"{seed_env} is not set. Copy .env.example to .env and fill it in.")
     port = int(os.getenv(port_env, str(default_port)))
-    # PROVIDER_USE_MAILBOX=true registers providers on Agentverse (for public URLs);
-    # default is a local endpoint for fast development.
-    if os.getenv("PROVIDER_USE_MAILBOX", "false").lower() == "true":
-        return Agent(name=name, seed=seed, port=port, mailbox=True, publish_agent_details=True)
+    # With AGENTVERSE_API_KEY set, providers get an Agentverse mailbox + profile page
+    # automatically. PROVIDER_USE_MAILBOX=false forces a local-only endpoint for fast dev.
+    default_mailbox = "true" if agentverse_api_key() else "false"
+    if os.getenv("PROVIDER_USE_MAILBOX", default_mailbox).lower() == "true":
+        agent = Agent(
+            name=name, seed=seed, port=port, mailbox=True, publish_agent_details=True,
+            readme_path=str(Path(__file__).parent / "profiles" / profile), description=description,
+        )
+        enable_auto_mailbox(agent, port)
+        return agent
     return Agent(name=name, seed=seed, port=port, endpoint=[f"http://127.0.0.1:{port}/submit"])

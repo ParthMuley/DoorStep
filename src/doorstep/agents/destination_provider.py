@@ -13,6 +13,10 @@ inventory = load_inventory("destination_inventory.json", "destinations")
 destination_proto = build_provider_protocol("accessible_destination", inventory)
 
 if __name__ == "__main__":
-    agent = build_provider_agent("doorstep_destination_provider", "DESTINATION_SEED", "DESTINATION_PORT", 8103)
+    agent = build_provider_agent(
+        "doorstep_destination_provider", "DESTINATION_SEED", "DESTINATION_PORT", 8103,
+        profile="destination_provider.md",
+        description="DOORSTEP DEMO: simulated accessible temporary-destination provider with fictional sites.",
+    )
     agent.include(destination_proto, publish_manifest=True)
     agent.run()

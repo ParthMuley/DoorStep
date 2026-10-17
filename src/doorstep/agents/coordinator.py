@@ -26,6 +26,7 @@ from uagents_core.contrib.protocols.chat import (
 )
 
 from doorstep.agents.provider_client import OfferResult, request_all_offers
+from doorstep.integrations.agentverse_setup import enable_auto_mailbox
 from doorstep.integrations.fetch_adapter import new_correlation_id
 
 load_dotenv()
@@ -49,10 +50,12 @@ def _require_env(name: str) -> str:
     return value
 
 
+PORT = int(os.getenv("COORDINATOR_PORT", "8101"))
+
 agent = Agent(
     name="doorstep_coordinator",
     seed=_require_env("COORDINATOR_SEED"),
-    port=int(os.getenv("COORDINATOR_PORT", "8101")),
+    port=PORT,
     mailbox=True,
     publish_agent_details=True,
     readme_path=str(README_PATH),
@@ -62,6 +65,7 @@ agent = Agent(
     ),
     handle_messages_concurrently=True,
 )
+enable_auto_mailbox(agent, PORT)
 
 chat_proto = Protocol(spec=chat_protocol_spec)
 
