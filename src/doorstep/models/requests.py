@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from .common import (
     SCHEMA_VERSION,
@@ -46,7 +46,13 @@ class ServiceRequest(DoorstepModel):
 
 
 class TransportOfferIn(DoorstepModel):
-    """Raw offer from a Transport provider agent (contract v1.0 section 3.4)."""
+    """Raw offer from a Transport provider agent (contract v1.0 section 3.4).
+
+    Extra provider fields (e.g. ``approved_by_partner``, ``base_node``) are
+    IGNORED, never trusted: approval and location come from B's registry.
+    """
+
+    model_config = ConfigDict(extra="ignore")
 
     offer_id: str
     provider_id: str
@@ -66,7 +72,10 @@ class TransportOfferIn(DoorstepModel):
 
 
 class DestinationOfferIn(DoorstepModel):
-    """Raw offer from a Destination provider agent (contract v1.0 section 3.5)."""
+    """Raw offer from a Destination provider agent (contract v1.0 section 3.5).
+    Extra provider fields are ignored, never trusted."""
+
+    model_config = ConfigDict(extra="ignore")
 
     offer_id: str
     provider_id: str
