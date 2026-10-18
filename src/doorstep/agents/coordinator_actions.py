@@ -10,6 +10,7 @@ from typing import Any
 from uagents import Context
 
 from doorstep.agents.provider_client import OfferResult, request_all_offers
+from doorstep.integrations.asi_cards import Card, case_card
 from doorstep.workflows.backend_client import (
     BackendError,
     DoorstepBackend,
@@ -60,12 +61,34 @@ async def start_readiness_check(correlation_id: str) -> str:
     return "\n".join(lines)
 
 
-async def case_status(case_id: str, correlation_id: str) -> str:
+async def case_status(case_id: str, correlation_id: str) -> str | Card:
     try:
         case = await get_backend().get_case_status(case_id, correlation_id)
     except (BackendError, OSError) as err:
         return backend_unavailable(err)
-    return case.get("summary_text") or f"{case_id}: resident status {case.get('resident_status')}."
+    return case_card_from_status(case)
+
+
+PROGRESS = ("REQUESTED", "PROVIDER_ACCEPTED", "PICKUP_CONFIRMED", "ARRIVAL_CONFIRMED")
+
+
+def case_card_from_status(case: dict[str, Any]) -> Card:
+    """Map B's case view to the case card. Status words are copied from B, never derived
+    from wording. v2 sends progress_steps; v1 cases fall back to B's evidence flags."""
+    if case.get("progress_steps"):
+        steps = [(s["step"], bool(s["done"]), s.get("at")) for s in case["progress_steps"]]
+    else:
+        evidence = case.get("evidence", {})
+        steps = [("REQUESTED", case.get("resident_status") not in (None, "UNKNOWN"), None),
+                 ("PROVIDER_ACCEPTED", bool(evidence.get("provider_accepted")), None),
+                 ("PICKUP_CONFIRMED", bool(evidence.get("pickup_confirmed")), None),
+                 ("ARRIVAL_CONFIRMED", bool(evidence.get("arrival_confirmed")), None)]
+    card_map = case.get("map") or {}
+    return case_card(
+        case_id=case["case_id"], display_name=case.get("display_name", case["case_id"]),
+        map_color=card_map.get("color"), map_label=card_map.get("label") or case.get("resident_status"),
+        zone_status=case.get("zone_status") or case.get("zone_rule"), steps=steps,
+        next_step=case.get("next_step"), communication_status=case.get("communication_status"))
 
 
 def _format_evaluation(label: str, result: OfferResult, evaluation: dict[str, Any] | None,

@@ -49,4 +49,6 @@ async def run_until(agents: list[Agent], done: asyncio.Event, timeout: float = 3
     try:
         await asyncio.wait_for(done.wait(), timeout=timeout)
     finally:
+        # Don't await the cancelled Bureau: its shutdown cancels every task on the loop,
+        # including the test itself.
         task.cancel()

@@ -10,6 +10,7 @@ coordination workflow.
 Run:  python -m doorstep.agents.coordinator
 """
 
+import asyncio
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,7 @@ from uagents_core.contrib.protocols.chat import (
 
 from doorstep.agents import coordinator_actions as actions
 from doorstep.integrations.agentverse_setup import enable_auto_mailbox
+from doorstep.integrations.asi_cards import Card, parse_card_selection
 from doorstep.integrations.fetch_adapter import new_correlation_id
 
 load_dotenv()
@@ -93,17 +95,36 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
     ctx.logger.info(f"[{correlation_id}] chat message from {sender[:16]}... ({len(text)} chars)")
 
     try:
-        reply = await route(ctx, text, correlation_id)
+        reply = await route(ctx, text, correlation_id, sender)
     except Exception as err:  # never leave the ASI:One user without an answer
         ctx.logger.exception(f"[{correlation_id}] coordinator error: {type(err).__name__}")
         reply = (f"Something went wrong on my side ({type(err).__name__}, ref {correlation_id}). "
                  "Nothing was changed; no assistance is confirmed.")
-    await ctx.send(sender, make_chat_reply(reply))
+    await ctx.send(sender, reply.to_message() if isinstance(reply, Card) else make_chat_reply(reply))
 
 
-async def route(ctx: Context, text: str, correlation_id: str) -> str:
-    # Minimal keyword routing; the full intent router + LangGraph workflow replace this in Step 4.
+PUSH_TEST_DELAY_SECONDS = 15
+
+
+async def _delayed_push(ctx: Context, sender: str, correlation_id: str) -> None:
+    """Spike: can the agent message an ASI:One user without a new user message? (V2 plan
+    assumes no push; alerts would be much better if this shows up in the chat.)"""
+    await asyncio.sleep(PUSH_TEST_DELAY_SECONDS)
+    ctx.logger.info(f"[{correlation_id}] sending unsolicited push test")
+    await ctx.send(sender, make_chat_reply(f"Push test follow-up (ref {correlation_id}). If you can read this "
+                                           "without sending another message, unsolicited updates work."))
+
+
+async def route(ctx: Context, text: str, correlation_id: str, sender: str = "") -> str | Card:
+    # Card clicks arrive as JSON of the CTA selection; prose falls through to keywords.
+    selection = parse_card_selection(text)
+    if selection and selection.get("action"):
+        return await route_selection(ctx, selection, correlation_id)
+    # Minimal keyword routing; ASI:One tool-calling intent + LangGraph replace this later.
     lowered = text.lower()
+    if "test push" in lowered:
+        asyncio.create_task(_delayed_push(ctx, sender, correlation_id))
+        return f"Push test: I will send an unsolicited follow-up in {PUSH_TEST_DELAY_SECONDS} s (ref {correlation_id})."
     if "provider" in lowered or "offer" in lowered:
         return await actions.show_suitable_providers(ctx, actions.case_from_text(text), correlation_id)
     if "start" in lowered and ("check" in lowered or "warning" in lowered):
@@ -111,6 +132,15 @@ async def route(ctx: Context, text: str, correlation_id: str) -> str:
     if "status" in lowered:
         return await actions.case_status(actions.case_from_text(text), correlation_id)
     return f"Coordinator online. {HELP_TEXT}"
+
+
+async def route_selection(ctx: Context, selection: dict, correlation_id: str) -> str | Card:
+    action, case_id = selection["action"], selection.get("case_id") or actions.DEFAULT_CASE
+    if action == "case_status":
+        return await actions.case_status(case_id, correlation_id)
+    if action == "show_matches":
+        return await actions.show_suitable_providers(ctx, case_id, correlation_id)
+    return f"The '{action}' action is not available yet in this demo build. Nothing was changed."
 
 
 @chat_proto.on_message(ChatAcknowledgement)

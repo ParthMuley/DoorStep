@@ -1,6 +1,7 @@
 """Coordinator <-> Transport/Destination agents over uAgents messaging (in-process)."""
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -44,12 +45,16 @@ async def ask_coordinator(providers, text: str) -> str:
 
     @tester.on_message(ChatMessage)
     async def on_reply(ctx: Context, sender: str, msg: ChatMessage):
+        LAST_REPLY["msg"] = msg
         replies.append(msg.content[0].text)
         done.set()
 
     await run_until([coordinator, tester, *providers], done)
     assert replies[0].startswith(DEMO_PREFIX)
     return replies[0]
+
+
+LAST_REPLY: dict = {}
 
 
 @pytest.fixture
@@ -139,3 +144,37 @@ async def test_unknown_provider_is_declined(providers):
     results = await _accept(providers, "transport_org_zzz", f"assign_{uuid4().hex[:6]}")
     assert results[0].decision == "DECLINED"
     assert results[0].reason == "UNKNOWN_PROVIDER"
+
+
+async def test_status_is_a_case_card_and_card_click_routes(providers, backend):
+    """One ASI:One session: ask for status, get a card, click its button (selection JSON)."""
+    await backend.start_demo_warning("zone_3", "la_hacks_demo_v1", "corr_setup")
+    coordinator = make_agent("coordinator")
+    coordinator.include(chat_proto)
+    tester = make_agent("asi_one_user")
+    replies: list[ChatMessage] = []
+    done = asyncio.Event()
+
+    def chat(text: str) -> ChatMessage:
+        return ChatMessage(timestamp=datetime.now(timezone.utc), msg_id=uuid4(),
+                           content=[TextContent(type="text", text=text)])
+
+    @tester.on_event("startup")
+    async def ask(ctx: Context):
+        await ctx.send(coordinator.address, chat("Status for Maria"))
+
+    @tester.on_message(ChatMessage)
+    async def on_reply(ctx: Context, sender: str, msg: ChatMessage):
+        replies.append(msg)
+        if len(replies) == 1:
+            selection = json.loads(msg.content[1].metadata["card_payload"])["ctas"][0]["selection"]
+            await ctx.send(coordinator.address, chat(json.dumps(selection)))
+        else:
+            done.set()
+
+    await run_until([coordinator, tester, *providers], done)
+
+    first, second = (m.content[1].metadata for m in replies)
+    assert first["card_kind"] == "detail" and first["card_protocol_version"] == "1"
+    assert second["card_kind"] == "detail"
+    assert "Maria" in replies[1].content[0].text
