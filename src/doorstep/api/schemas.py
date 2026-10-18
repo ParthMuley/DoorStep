@@ -5,14 +5,15 @@ from __future__ import annotations
 from typing import Literal, Optional
 
 from doorstep.models import (
-    Consent,
     DestinationOfferIn,
     DoorstepModel,
     EscalationReason,
     Evidence,
     Language,
-    Resident,
+    Organization,
+    ResidentProfile,
     TransportOfferIn,
+    Volunteer,
 )
 
 
@@ -28,8 +29,22 @@ class WarningBody(Body):
 
 
 class RegisterResidentBody(Body):
-    profile: Resident
-    consent: Optional[Consent] = None
+    resident: ResidentProfile
+
+
+class RegisterOrganizationBody(Body):
+    organization: Organization
+
+
+class AddVolunteerBody(Body):
+    volunteer: Volunteer
+
+
+class AvailabilityBody(Body):
+    alert_id: str
+    available: bool
+    responded_at: Optional[str] = None
+    idempotency_key: Optional[str] = None
 
 
 class ResponseBody(Body):

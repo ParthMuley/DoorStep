@@ -58,6 +58,7 @@ from .errors import (
     safety_code,
 )
 from .event_log import EventLog
+from .registry import RegistryService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -83,6 +84,7 @@ class DoorstepService:
         self.store = Store(db)
         self.events = EventLog(db)
         self.sim = MessageSimulator(db, self.store)
+        self.registry = RegistryService(db, self.store, self.events)
         self.graph = graph or build_demo_graph()
 
     # ================================================================ demo
@@ -94,12 +96,14 @@ class DoorstepService:
             for o in seed.organizations():
                 self.store.save_organization(o)
             for r in seed.residents():
-                self.store.save_resident(r)
+                self.store.save_resident_profile(r, legacy_sector=seed.LEGACY_SECTORS.get(r.resident_id))
             for p in seed.provider_registry():
                 self.store.save_registration(p)
             self.db.set_setting("escalation_ack", "true")
             self.events.append("DEMO_RESET", case_id=None, data={"simulated": True})
-        return {"status": "reset", "residents": len(seed.residents()), "simulated": True}
+        orgs = seed.organizations()
+        return {"status": "reset", "residents": len(seed.residents()), "organizations": len(orgs),
+                "volunteers": sum(len(o.volunteers) for o in orgs), "simulated": True}
 
     def set_escalation_ack(self, acknowledge: bool) -> dict[str, Any]:
         self.db.set_setting("escalation_ack", "true" if acknowledge else "false")
@@ -233,15 +237,6 @@ class DoorstepService:
                              "communication_status": c.communication_status})
         return {"alert_id": alert.alert_id, "zone_id": zone_id, "verified": True, "simulated": True,
                 "case_ids": case_ids, "checkins": checkins, "correlation_id": corr, "created_at": alert.created_at}
-
-    def register_resident(self, profile: Resident, consent: Optional[Any] = None) -> Resident:
-        if consent is not None:
-            profile = profile.model_copy(update={"consent": consent})
-        profile = profile.model_copy(update={"last_confirmed_at": profile.last_confirmed_at or utc_now_iso()})
-        with self.db.tx():
-            self.store.save_resident(profile)
-            self.events.append("RESIDENT_REGISTERED", case_id=None, data={"resident_id": profile.resident_id})
-        return profile
 
     # ============================================ submit_resident_response
     def submit_resident_response(self, case_id: str, text: str, language: Optional[str] = None, *,
@@ -1097,7 +1092,7 @@ class DoorstepService:
 
     def registry_view(self) -> dict[str, Any]:
         return {"providers": [p.model_dump() for p in self.store.registry().values()],
-                "organizations": [o.model_dump() for o in self.store.list_organizations()], "simulated": True}
+                "organizations": self.registry.list_organizations(), "simulated": True}
 
     def zones_view(self) -> dict[str, Any]:
         return {

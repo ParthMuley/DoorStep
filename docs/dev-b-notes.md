@@ -16,6 +16,18 @@ PYTHONPATH=src python -m pytest tests/unit -q
 
 Env: `SIMULATION_MODE=true` (required), `DEMO_AUTH_TOKEN`, `DOORSTEP_API_PORT`, `DOORSTEP_API_URL`, `MONGODB_URI`, `MONGODB_USERS_DB`, `MONGODB_ORGS_DB`, `USE_MONGOMOCK`. Dependencies to add to `pyproject.toml` (A owns it): `pymongo`, dev `mongomock` (plus `shapely`, `openai` for later steps).
 
+## v2 endpoints available now (B2: registration)
+
+Contract v2.0 §5.2 / §5.4, responses carry `schema_version: "2.0"`:
+- `POST /residents` `{resident: {...}}`: needs codes validated, `wants_help_contact:false` forces CHECKIN off, LOW/FAILED geocode → `zone_status: UNKNOWN`.
+- `POST /organizations` `{organization: {...}}`: volunteers embedded; availability/reservations are reset at registration.
+- `POST /organizations/{org_id}/volunteers` `{volunteer: {...}}`: needs `X-Org-Agent: <org_id>`.
+- `GET /organizations`: public, sanitized (no phones, addresses or volunteer records).
+- `GET /orgs/{org_id}/volunteers?alert_id=`: needs token + `X-Org-Agent`; only that org's volunteers.
+- `POST /orgs/{org_id}/volunteers/{volunteer_id}/availability` `{alert_id, available}`: repeat-safe; stale alert → 409.
+
+The v1 flow endpoints are unchanged until the switch-over. They read the new resident documents through a temporary adapter (`services/legacy.py`).
+
 ## Contract v1.0 conformance
 
 - Paths, request bodies, response fields, status codes (201 on create, 200 on a repeated idempotency key) and error codes all follow Section 3.

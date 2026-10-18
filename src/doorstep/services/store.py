@@ -24,12 +24,18 @@ from doorstep.models import (
     ProviderRegistration,
     RecoveryReferral,
     Resident,
+    ResidentProfile,
     ServiceRequest,
+    Volunteer,
+    VolunteerAvailability,
     VerificationEvent,
 )
 
+from pymongo.errors import DuplicateKeyError
+
 from .db import Database
 from .errors import NotFound
+from .legacy import to_legacy_resident
 
 M = TypeVar("M", bound=BaseModel)
 ACCEPTED_STATES = ("ACCEPTED", "COMPLETED")
@@ -69,21 +75,71 @@ class Store:
             update["$unset"] = {f: "" for f in unset}
         self.db.coll(coll).update_one({"_id": key}, update, upsert=True)
 
-    # --- organizations / residents / registry ----------------------------
+    # --- organizations (doorstep_orgs) ------------------------------------
     def save_organization(self, o: Organization) -> None:
-        self._upsert("organizations", o.organization_id, o)
+        self._upsert("organizations", o.org_id, o)
+
+    def get_organization(self, org_id: str) -> Organization:
+        return self._require("organizations", {"_id": org_id}, Organization, org_id)
+
+    def find_organization(self, org_id: str) -> Optional[Organization]:
+        return self._get("organizations", {"_id": org_id}, Organization)
 
     def list_organizations(self) -> list[Organization]:
         return self._list("organizations", {}, Organization, sort="_id")
 
-    def save_resident(self, r: Resident) -> None:
-        self._upsert("residents", r.resident_id, r)
+    def add_volunteer(self, org_id: str, v: Volunteer) -> bool:
+        """Append a volunteer; False if the org is missing or the volunteer_id already exists there."""
+        result = self.db.coll("organizations").update_one(
+            {"_id": org_id, "volunteers.volunteer_id": {"$ne": v.volunteer_id}},
+            {"$push": {"volunteers": v.model_dump(mode="json")}})
+        return result.modified_count == 1
+
+    def set_volunteer_availability(self, org_id: str, volunteer_id: str, a: VolunteerAvailability) -> bool:
+        result = self.db.coll("organizations").update_one(
+            {"_id": org_id, "volunteers.volunteer_id": volunteer_id},
+            {"$set": {"volunteers.$.availability": a.model_dump(mode="json")}})
+        return result.matched_count == 1
+
+    def record_provider_event(self, key: str, payload: dict) -> tuple[dict, bool]:
+        """Idempotent provider-side event. Returns (stored payload, created?)."""
+        coll = self.db.coll("provider_events")
+        try:
+            coll.insert_one({"_id": key, "_ord": self.db.next_ord(), **payload})
+            return payload, True
+        except DuplicateKeyError:
+            doc = coll.find_one({"_id": key}) or {}
+            return {k: v for k, v in doc.items() if not k.startswith("_")}, False
+
+    # --- residents (doorstep_users) -----------------------------------------
+    def save_resident_profile(self, p: ResidentProfile, legacy_sector: Optional[str] = None) -> None:
+        extra = {"_legacy_sector": legacy_sector} if legacy_sector else None
+        self._upsert("residents", p.resident_id, p, extra_set=extra)
+
+    def get_resident_profile(self, resident_id: str) -> ResidentProfile:
+        return self._require("residents", {"_id": resident_id}, ResidentProfile, resident_id)
+
+    def find_resident_profile(self, resident_id: str) -> Optional[ResidentProfile]:
+        return self._get("residents", {"_id": resident_id}, ResidentProfile)
+
+    def list_resident_profiles(self) -> list[ResidentProfile]:
+        return self._list("residents", {}, ResidentProfile, sort="_id")
+
+    def resident_by_phone(self, phone: str) -> Optional[ResidentProfile]:
+        return self._get("residents", {"phone": phone}, ResidentProfile)
+
+    # v1 view used by the current engine until the v2 switch-over (services/legacy.py).
+    def _legacy(self, doc: dict) -> Resident:
+        return to_legacy_resident(ResidentProfile.model_validate(_strip(doc)), doc.get("_legacy_sector"))
 
     def get_resident(self, resident_id: str) -> Resident:
-        return self._require("residents", {"_id": resident_id}, Resident, resident_id)
+        doc = self.db.coll("residents").find_one({"_id": resident_id})
+        if doc is None:
+            raise NotFound(f"Resident {resident_id!r} not found")
+        return self._legacy(doc)
 
     def list_residents(self) -> list[Resident]:
-        return self._list("residents", {}, Resident, sort="_id")
+        return [self._legacy(d) for d in self.db.coll("residents").find({}).sort("_id", 1)]
 
     def save_registration(self, p: ProviderRegistration) -> None:
         self._upsert("provider_registry", p.provider_id, p)
