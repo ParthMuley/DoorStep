@@ -9,6 +9,8 @@ new/changed/canceled simulated alerts. It never interprets a status itself; B do
 Run:  python -m doorstep.agents.calamity_checker
 """
 
+import hashlib
+import json
 import os
 from typing import Any, Awaitable, Callable
 
@@ -51,6 +53,16 @@ async def http_fetch(url: str) -> tuple[bool, int | None, dict[str, Any] | None,
         return False, None, None, type(err).__name__
 
 
+def ingest_key(source_id: str, ok: bool, payload: dict[str, Any] | None, fetched_at: str) -> str:
+    """Idempotency key for /alerts/ingest. Content-based: the same feed content is a true
+    duplicate, new content is always a new ingest (a time-only key collided when two polls
+    landed in the same second, and B correctly replayed the first, empty result)."""
+    if not ok:
+        return f"{source_id}:failed:{fetched_at}"
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()[:24]
+    return f"{source_id}:{digest}"
+
+
 class CalamityChecker:
     def __init__(self, get_backend: Callable[[], DoorstepBackendV2], fetch: FeedFetcher = http_fetch,
                  coordinator_address: Callable[[], str] = lambda: address_for("COORDINATOR")):
@@ -66,7 +78,8 @@ class CalamityChecker:
         source = {**source_for(url), "fetched_at": fetched_at}
         try:
             result = await self.get_backend().ingest_alerts(source, ok, status, error, payload,
-                                                            f"{source['source_id']}:{fetched_at}", corr)
+                                                            ingest_key(source["source_id"], ok, payload, fetched_at),
+                                                            corr)
         except (BackendError, OSError) as err:
             self._failed(ctx, corr, f"ingest {type(err).__name__}")
             return None
@@ -113,7 +126,7 @@ class CalamityChecker:
 
 def main() -> None:
     agent = build_agent("doorstep_calamity_checker", seed_for("CALAMITY_SEED"), role_port("CALAMITY"),
-                        "calamity_checker.md",
+                        "calamity_checker.md", "calamity_checker",
                         "DOORSTEP DEMO: polls a Cal OES-shaped evacuation feed every 2 minutes and reports "
                         "simulated official alerts to the Doorstep coordinator.")
     checker = CalamityChecker(lambda: DoorstepBackendV2())

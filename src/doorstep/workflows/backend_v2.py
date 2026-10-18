@@ -5,14 +5,33 @@ methods are removed in the switch-over PR window. Rev 3: one Volunteer Network a
 acts for all partner orgs; every write names its `org_id` and B checks it.
 """
 
+import os
 from typing import Any
 
 from doorstep.workflows.backend_client import BackendError, DoorstepBackend  # noqa: F401
 
 V2 = "2.0"
+DEFAULT_NETWORK_TOKEN = "change-me-network-agent-token"  # B's default; real value only in .env
+
+
+def network_agent_token() -> str:
+    return os.getenv("NETWORK_AGENT_TOKEN") or DEFAULT_NETWORK_TOKEN
 
 
 class DoorstepBackendV2(DoorstepBackend):
+    """`agent_token` is set only for the Volunteer Network agent: network-acting routes
+    (outreach, availability, accept, recovery respond) need `X-Agent-Token` (contract v2.1 §1)."""
+
+    def __init__(self, *args: Any, agent_token: str | None = None, **kwargs: Any):
+        super().__init__(*args, **kwargs)
+        self.agent_token = agent_token
+
+    def _net(self) -> dict[str, str]:
+        return {"X-Agent-Token": self.agent_token} if self.agent_token else {}
+
+    async def register_agent(self, role: str, agent_address: str, correlation_id: str) -> dict[str, Any]:
+        """`PUT /agents/{role}`: publish this agent's address so B can hand it out (seed stays private)."""
+        return await self._request("PUT", f"/agents/{role}", correlation_id, {"agent_address": agent_address})
     @staticmethod
     def _v2(correlation_id: str, **fields: Any) -> dict[str, Any]:
         return {"schema_version": V2, "correlation_id": correlation_id,
@@ -42,16 +61,18 @@ class DoorstepBackendV2(DoorstepBackend):
         return await self._request("GET", "/regions/near", correlation_id,
                                    params={"zone_id": zone_id} if zone_id else None)
 
-    async def start_outreach(self, alert_id: str, idempotency_key: str, correlation_id: str) -> dict[str, Any]:
+    async def start_outreach(self, alert_id: str, idempotency_key: str, correlation_id: str,
+                             max_orgs: int | None = None) -> dict[str, Any]:
         return await self._request("POST", f"/alerts/{alert_id}/outreach", correlation_id,
-                                   self._v2(correlation_id, idempotency_key=idempotency_key))
+                                   self._v2(correlation_id, idempotency_key=idempotency_key, max_orgs=max_orgs),
+                                   extra_headers=self._net())
 
     async def record_availability(self, alert_id: str, volunteer_id: str, org_id: str, available: bool,
                                   responded_at: str, idempotency_key: str, correlation_id: str) -> dict[str, Any]:
         return await self._request(
             "POST", f"/alerts/{alert_id}/volunteers/{volunteer_id}/availability", correlation_id,
             self._v2(correlation_id, org_id=org_id, available=available, responded_at=responded_at,
-                     idempotency_key=idempotency_key))
+                     idempotency_key=idempotency_key), extra_headers=self._net())
 
     # ---- matching + assignments
     async def propose_match(self, case_id: str, create_proposal: bool, idempotency_key: str, correlation_id: str,
@@ -67,7 +88,7 @@ class DoorstepBackendV2(DoorstepBackend):
                         site_id: str | None = None) -> dict[str, Any]:
         return await self._request("POST", f"/assignments/{assignment_id}/accept", correlation_id, self._v2(
             correlation_id, org_id=org_id, volunteer_id=volunteer_id, site_id=site_id, decision=decision,
-            idempotency_key=idempotency_key))
+            idempotency_key=idempotency_key), extra_headers=self._net())
 
     async def pickup_v2(self, assignment_id: str, evidence: dict[str, Any], idempotency_key: str,
                         correlation_id: str) -> dict[str, Any]:
@@ -101,7 +122,8 @@ class DoorstepBackendV2(DoorstepBackend):
     async def respond_recovery(self, referral_id: str, org_id: str, decision: str, idempotency_key: str,
                                correlation_id: str, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         return await self._request("POST", f"/recovery/{referral_id}/respond", correlation_id, self._v2(
-            correlation_id, org_id=org_id, decision=decision, evidence=evidence, idempotency_key=idempotency_key))
+            correlation_id, org_id=org_id, decision=decision, evidence=evidence, idempotency_key=idempotency_key),
+            extra_headers=self._net())
 
     # ---- road closures (News agent)
     async def news_feed(self, correlation_id: str) -> dict[str, Any]:

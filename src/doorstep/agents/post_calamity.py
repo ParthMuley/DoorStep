@@ -74,7 +74,7 @@ def build_post_calamity_protocol(get_backend: Callable[[], DoorstepBackendV2],
 
 def main() -> None:
     agent = build_agent("doorstep_post_calamity", seed_for("POSTCALAMITY_SEED"), role_port("POSTCALAMITY"),
-                        "post_calamity.md",
+                        "post_calamity.md", "post_calamity",
                         "DOORSTEP DEMO: consent-based referrals to fictional recovery organizations "
                         "(temporary housing, insurance guidance, supplies). Never files claims or promises housing.")
     agent.include(build_post_calamity_protocol(lambda: DoorstepBackendV2()), publish_manifest=True)

@@ -82,3 +82,25 @@ Reviewed `docs/interface-contract.md` v2.0 rev 2 and `docs/DOORSTEP_V2_TEAM_PLAN
   - a gazetteer maps road names; unmapped names never route.
 - **Tests run offline:** the shared fixture now forces `USE_LLM_INTENT=false` and `USE_LLM_EXTRACTION=false`, because `.env` enabled the real ASI:One API.
 - **Live (7 agents on mailboxes, 61 s):** Ridge Ave `OFFICIAL_CONFIRMED` (`STRUCTURED_FEED`); Canyon Rd `UNVERIFIED_REPORT` (`ASI_ONE_EXTRACTION`); the bake-sale article was ignored.
+
+### Note for B (2026-10-18): unit tests aren't hermetic for NETWORK_AGENT_TOKEN
+B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN` but not `NETWORK_AGENT_TOKEN`, so a custom network token in a developer's `.env` makes 5 unit tests fail with 403 (test_alerts x3, test_matching_v2 network-token test, test_recovery_v2 network-token test). Suggested fix (B's file): also `monkeypatch.delenv("NETWORK_AGENT_TOKEN", raising=False)`. A's integration tests already clear it.
+
+
+### Switched to B's real contract v2.1 routes (2026-10-18)
+- **Agents now use B's real routes:**
+  - alerts ingest, network outreach and availability;
+  - `/regions/near`, matching, v2 accept/pickup/arrival;
+  - escalate/ack, recovery and respond;
+  - cases, plus `PUT /agents/{role}` (every agent registers its address at startup).
+- **Network token:** only the Volunteer Network agent's client holds `X-Agent-Token` (`NETWORK_AGENT_TOKEN`).
+- **Test double** (`tests/integration/fake_v2_backend.py`) now covers **only** closures; routes and dashboard come later.
+- **Real-backend behavior adopted:**
+  - matching refuses unconfirmed needs (David's reply comes first in the demo);
+  - recovery only after arrival;
+  - pickup/arrival responses carry no `map`, so the color comes from `GET /cases/{id}`;
+  - outreach uses `region_ids` and `awaiting`.
+- **Bugs found against B's real backend:**
+  1. The Calamity ingest idempotency key was time-based; two polls in one second collided, and B correctly replayed the empty first result. It is now content-hashed.
+  2. The News agent's startup poll notified nobody, and the on-demand poll then stayed silent. On-demand polls now always return a snapshot, and the first scheduled tick is skipped.
+- **Tests:** 210 passed (B's unit tests included). **Live:** 7/7 mailboxes, 7/7 registered with B, full journey in 70 s.

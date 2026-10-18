@@ -34,7 +34,10 @@ class NewsAgent:
         self.extractor = extractor or ClosureExtractor()
         self.seen: set[str] = set()  # item IDs already posted (B dedupes too)
 
-    async def poll_once(self, ctx: Context, correlation_id: str | None = None) -> list[dict[str, Any]]:
+    async def poll_once(self, ctx: Context, correlation_id: str | None = None,
+                        notify_always: bool = False) -> list[dict[str, Any]]:
+        """`notify_always` (on-demand polls): tell Doorstep even when nothing is new, so the
+        person who asked always gets the current road conditions."""
         corr = correlation_id or new_correlation_id()
         backend, fetched_at, accepted = self.get_backend(), utc_now(), []
         try:
@@ -74,7 +77,7 @@ class NewsAgent:
             ctx.logger.warning(f"[{corr}] news poll failed: {getattr(err, 'code', type(err).__name__)}")
             return []
         ctx.logger.info(f"[{corr}] closures ingested: {[(a.get('road_name'), a.get('state')) for a in accepted]}")
-        if accepted:
+        if accepted or notify_always:
             await ctx.send(self.coordinator_address(), ClosureNotification(
                 correlation_id=corr, created_at=utc_now(), new_records=accepted))
         return accepted
@@ -82,19 +85,24 @@ class NewsAgent:
     def protocol(self, interval_seconds: float) -> Protocol:
         proto = Protocol(name="doorstep_news", version="2.1")
 
+        ticks = {"n": 0}
+
         @proto.on_interval(period=interval_seconds)
         async def scheduled(ctx: Context):
+            ticks["n"] += 1
+            if ticks["n"] == 1:  # uagents fires interval handlers at startup; first poll is on demand
+                return
             await self.poll_once(ctx)
 
         @proto.on_message(PollNow)
         async def poll_now(ctx: Context, sender: str, msg: PollNow):
-            await self.poll_once(ctx, msg.correlation_id)
+            await self.poll_once(ctx, msg.correlation_id, notify_always=True)
 
         return proto
 
 
 def main() -> None:
-    agent = build_agent("doorstep_news", seed_for("NEWS_SEED"), role_port("NEWS"), "news.md",
+    agent = build_agent("doorstep_news", seed_for("NEWS_SEED"), role_port("NEWS"), "news.md", "news",
                         "DOORSTEP DEMO: gathers simulated official road closures and news reports; reports are "
                         "labeled unverified, and no report never means a road is open.")
     agent.include(NewsAgent(lambda: DoorstepBackendV2()).protocol(float(os.getenv("NEWS_POLL_INTERVAL_SECONDS", "120"))),

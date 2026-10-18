@@ -41,7 +41,7 @@ def build_escalation_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> P
 
 def main() -> None:
     agent = build_agent("doorstep_escalation_simulator", seed_for("ESCALATION_SEED"), role_port("ESCALATION"),
-                        "escalation.md",
+                        "escalation.md", "escalation",
                         "DOORSTEP DEMO: simulated authorized-response service that acknowledges receipt of "
                         "escalations only. Never dispatches anyone; not connected to 911.")
     agent.include(build_escalation_protocol(lambda: DoorstepBackendV2()), publish_manifest=True)

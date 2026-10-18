@@ -36,7 +36,7 @@ from doorstep.integrations.fetch_messages import (
     ReportUnavailable,
     utc_now,
 )
-from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
+from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2, network_agent_token
 
 load_dotenv()
 
@@ -80,7 +80,7 @@ def build_network_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> Prot
                         answers["available" if answer == "YES" else "unavailable"].append(vid)
                     else:
                         answers["awaiting_reply"].append(vid)
-                orgs.append({"org_id": org["org_id"], "name": org.get("name"), "region_id": org.get("region_id"),
+                orgs.append({"org_id": org["org_id"], "name": org.get("name"), "region_ids": org.get("region_ids", []),
                              "distance_km": org.get("distance_km"), "asked": asked,
                              "skipped": org.get("skipped", []), **answers})
         except (BackendError, OSError) as err:
@@ -158,10 +158,12 @@ def build_network_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> Prot
 
 def main() -> None:
     agent = build_agent("doorstep_volunteer_network", seed_for("NETWORK_SEED"), role_port("NETWORK"),
-                        "volunteer_network.md",
+                        "volunteer_network.md", "volunteer_network",
                         "DOORSTEP DEMO: reaches the volunteers of the partner organizations nearest an evacuation "
                         "zone (simulated), forwards their answers, and reports pickup and arrival.")
-    agent.include(build_network_protocol(lambda: DoorstepBackendV2()), publish_manifest=True)
+    # Only this agent holds NETWORK_AGENT_TOKEN (B requires it for network-acting routes).
+    agent.include(build_network_protocol(lambda: DoorstepBackendV2(agent_token=network_agent_token())),
+                  publish_manifest=True)
     agent.run()
 
 

@@ -61,7 +61,7 @@ async def test_news_agent_ingests_and_notifies_with_honest_states(monkeypatch):
     async def go(ctx: Context):
         await ctx.send(news_agent.address, PollNow(correlation_id="c1", created_at=utc_now()))
         await asyncio.sleep(1.0)
-        await ctx.send(news_agent.address, PollNow(correlation_id="c2", created_at=utc_now()))  # nothing new
+        await ctx.send(news_agent.address, PollNow(correlation_id="c2", created_at=utc_now()))  # nothing new, still answers
         await asyncio.sleep(1.0)
         await backend.trigger_closure("PUBLISH_NEWS", "c3", headline="Ridge Ave reopened, residents say (DEMO)",
                                       body="Neighbors say crews reopened Ridge Ave. (DEMO)")
@@ -70,12 +70,13 @@ async def test_news_agent_ingests_and_notifies_with_honest_states(monkeypatch):
         done.set()
 
     await run_until([driver, news_agent], done)
-    assert len(notes) == 2
+    assert len(notes) == 3  # every on-demand poll answers, so the asker always gets current conditions
+    assert notes[1].new_records == []  # nothing new is reported as nothing new, never as "open"
     first = {r["road_name"]: r for r in notes[0].new_records}
     assert first["Ridge Ave"]["state"] == "OFFICIAL_CONFIRMED" and first["Ridge Ave"]["used_for_routing"]
     assert first["Canyon Rd"]["state"] == "UNVERIFIED_REPORT" and not first["Canyon Rd"]["used_for_routing"]
     assert "Library" not in str(notes[0].new_records)  # no road claim -> nothing posted
-    conflict = notes[1].new_records[0]
+    conflict = notes[2].new_records[0]
     assert conflict["road_name"] == "Ridge Ave" and conflict["state"] == "CONFLICTING"
     # A news report never becomes official or a routing block.
     assert all(c["state"] != "OFFICIAL_CONFIRMED" for c in state["closures"]

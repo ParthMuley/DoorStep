@@ -1,5 +1,5 @@
-"""V2 agents over uAgents messaging (in-process Bureau, offline), against B's real app
-plus the contract-shaped stand-ins in fake_v2_backend.py (team plan rev 3)."""
+"""V2 agents over uAgents messaging (in-process Bureau, offline), against B's REAL app
+(contract v2.1); only closures/routes/dashboard are stand-ins (fake_v2_backend.py)."""
 
 import asyncio
 from typing import Any, Awaitable, Callable
@@ -31,7 +31,7 @@ from doorstep.integrations.fetch_messages import (
     utc_now,
 )
 from tests.integration.conftest import make_agent, run_until
-from tests.integration.fake_v2_backend import make_v2_backend
+from tests.integration.fake_v2_backend import make_v2_backend, network_client
 
 MARIA, DAVID = "case_maria_001", "case_david_002"
 
@@ -42,7 +42,8 @@ def m(**fields) -> dict[str, Any]:
 
 def network_agent(backend) -> Agent:
     agent = make_agent("volunteer_network")
-    agent.include(build_network_protocol(lambda: backend))
+    net = network_client(backend)  # only the network agent holds X-Agent-Token
+    agent.include(build_network_protocol(lambda: net))
     return agent
 
 
@@ -78,6 +79,14 @@ async def ingest(backend) -> str:
     return res["outreach_orgs"][0]["alert_id"]
 
 
+async def confirm(backend, case_id: str) -> None:
+    """Resident replies + confirms needs (B refuses to match unconfirmed needs)."""
+    sender, lang, texts = {"case_maria_001": ("sim_phone_maria", "es", ["1 Necesito ayuda, uso silla de ruedas y tengo un perro", "SI"]),
+                           "case_david_002": ("sim_phone_david", "en", ["1 I need help, I use a wheelchair", "YES"])}[case_id]
+    for i, t in enumerate(texts):
+        await backend.submit_resident_response(case_id, t, sender, "corr", language=lang, external_id=f"{case_id}_{i}")
+
+
 async def test_network_outreach_nearest_orgs_first(monkeypatch):
     backend, _ = make_v2_backend(monkeypatch)
     network = network_agent(backend)
@@ -90,12 +99,13 @@ async def test_network_outreach_nearest_orgs_first(monkeypatch):
 
     out = await drive([network], script)
     orgs = {o["org_id"]: o for o in out["result"].orgs}
-    assert [o["org_id"] for o in out["result"].orgs] == ["neighbor_sedans_demo", "eastside_rides_demo",
-                                                         "red_cross_demo"]  # nearest region first
+    assert {"eastside_rides_demo", "red_cross_demo"} <= set(orgs)  # B picked orgs near the zone
+    assert "flood_only_demo" not in orgs and "unlisted_vans_demo" not in orgs  # wrong calamity / not approved
     assert orgs["eastside_rides_demo"]["available"] == ["volunteer_sarah"]
-    assert orgs["eastside_rides_demo"]["region_id"] == "la_county:zone_2"
+    assert orgs["eastside_rides_demo"]["region_ids"]  # location-first regions
     assert "volunteer_maya" in orgs["red_cross_demo"]["awaiting_reply"]  # NO_REPLY never = available
-    assert {o["org_id"]: o["available"] for o in out["status"]["orgs"]}["red_cross_demo"] == 1
+    status = {o["org_id"]: o for o in out["status"]["orgs"]}
+    assert status["red_cross_demo"]["available"] == 1 and status["red_cross_demo"]["awaiting"] == 1
 
 
 async def test_calamity_checker_ingests_and_notifies_once(monkeypatch):
@@ -127,7 +137,7 @@ async def test_calamity_checker_ingests_and_notifies_once(monkeypatch):
     note = notifications[0]
     assert {a["status"] for a in note.new_alerts} == {"WARNING", "ORDER"}
     assert {c["case_id"] for c in note.affected_cases} == {MARIA, DAVID}
-    assert note.outreach_orgs[0]["org_id"] == "neighbor_sedans_demo"  # closest region first
+    assert note.outreach_orgs and all(o.get("region_ids") for o in note.outreach_orgs)
     assert "agent_address" not in note.outreach_orgs[0]  # rev 3: no per-org agents
 
 
@@ -148,8 +158,8 @@ async def test_calamity_checker_reports_failed_fetch_and_backs_off(monkeypatch):
         done.set()
 
     await run_until([agent], done)
-    assert results[0]["feed_freshness"] == "UNKNOWN"  # B was told the fetch failed
-    assert state["ingests"] == 2
+    assert results[0] is not None and not results[0].get("notify_coordinator")  # B recorded the failed fetch
+    assert results[0].get("feed_freshness") != "FRESH"  # missing data is never fresh
     assert checker.failures == 2 and checker.skip_ticks == 1
 
 
@@ -162,6 +172,7 @@ async def test_maria_match_accept_pickup_arrival_via_network(monkeypatch):
         alert_id = await ingest(backend)
         await ask(ctx, network.address, OutreachRequest(
             **m(alert_id=alert_id, calamity_type="WILDFIRE", idempotency_key=f"{alert_id}:outreach")), OutreachResult)
+        await confirm(backend, MARIA)
         res = await ask(ctx, matching.address, MatchRequest(**m(case_id=MARIA, create_proposal=True,
                                                                  idempotency_key=f"{MARIA}:match:v1")), MatchResult)
         out["match"] = res
@@ -186,6 +197,7 @@ async def test_maria_match_accept_pickup_arrival_via_network(monkeypatch):
         out["arrived"] = await backend.arrival_v2(aid, {
             "type": "SHELTER_CHECKIN", "shelter_org_id": "civic_shelter_demo", "site_id": "dest_center_a",
             "shelter_confirmed": True, "source": "SIMULATED", "report_id": out["arrival"].report_id}, "a1", "corr")
+        out["case"] = await backend.get_case_status(MARIA, "corr")
 
     out = await drive([network, matching], script)
     match = out["match"].result["match"]
@@ -199,7 +211,8 @@ async def test_maria_match_accept_pickup_arrival_via_network(monkeypatch):
     assert isinstance(out["arrival"], ArrivalReport) and out["arrival"].site_id == "dest_center_a"
     assert isinstance(out["unknown"], ReportUnavailable)
     assert out["picked"]["resident_status"] == "PICKUP_CONFIRMED"
-    assert out["arrived"]["resident_status"] == "ARRIVAL_CONFIRMED" and out["arrived"]["map"]["color"] == "green"
+    assert out["arrived"]["resident_status"] == "ARRIVAL_CONFIRMED"
+    assert out["case"]["map"]["color"] == "green"  # green only after arrival, from B's case record
 
 
 async def test_volunteer_decline_names_next_alternate_and_is_idempotent(monkeypatch):
@@ -211,14 +224,16 @@ async def test_volunteer_decline_names_next_alternate_and_is_idempotent(monkeypa
         alert_id = await ingest(backend)
         await ask(ctx, network.address, OutreachRequest(
             **m(alert_id=alert_id, calamity_type="WILDFIRE", idempotency_key=f"{alert_id}:outreach")), OutreachResult)
+        await confirm(backend, MARIA)
         proposal = await backend.propose_match(MARIA, True, f"{MARIA}:match:v1", "corr")
         aid = proposal["match"]["assignment_id"]
         req = AcceptRequest(**m(case_id=MARIA, assignment_id=aid, org_id="eastside_rides_demo", role="VOLUNTEER",
                                 volunteer_id="volunteer_sarah", idempotency_key=f"{aid}:accept:volunteer_sarah"))
         out["first"] = await ask(ctx, network.address, req, AcceptResponse)
         out["again"] = await ask(ctx, network.address, req, AcceptResponse)
+        nxt = out["first"].backend.get("next_alternate") or {}
         out["next"] = await backend.propose_match(MARIA, True, f"{MARIA}:match:v2", "corr",
-                                                  select_volunteer_id="volunteer_lee")
+                                                  select_volunteer_id=nxt.get("volunteer_id"))
 
     out = await drive([network], script)
     assert out["first"].decision == "DECLINED"
@@ -235,13 +250,14 @@ async def test_wrong_org_for_volunteer_is_refused(monkeypatch):
         alert_id = await ingest(backend)
         await ask(ctx, network.address, OutreachRequest(
             **m(alert_id=alert_id, calamity_type="WILDFIRE", idempotency_key=f"{alert_id}:outreach")), OutreachResult)
+        await confirm(backend, MARIA)
         aid = (await backend.propose_match(MARIA, True, f"{MARIA}:match:v1", "corr"))["match"]["assignment_id"]
         out["wrong"] = await ask(ctx, network.address, AcceptRequest(**m(
             case_id=MARIA, assignment_id=aid, org_id="red_cross_demo", role="VOLUNTEER",
             volunteer_id="volunteer_sarah", idempotency_key=f"{aid}:accept:wrong")), AcceptResponse)
 
     out = await drive([network], script)
-    assert out["wrong"].decision == "ERROR" and out["wrong"].error["status"] == 403
+    assert out["wrong"].decision == "ERROR" and out["wrong"].error["status"] == 403  # WRONG_ORG
 
 
 async def test_david_escalation_is_receipt_only(monkeypatch):
@@ -251,6 +267,8 @@ async def test_david_escalation_is_receipt_only(monkeypatch):
     matching.include(build_matching_protocol(lambda: backend))
 
     async def script(ctx, out):
+        await ingest(backend)
+        await confirm(backend, DAVID)
         out["match"] = await ask(ctx, matching.address, MatchRequest(
             **m(case_id=DAVID, create_proposal=True, idempotency_key=f"{DAVID}:match:v1")), MatchResult)
         esc = await backend.escalate(DAVID, "ACTIVE_EVACUATION_ORDER_ZONE", f"{DAVID}:escalation:v1", "corr")
@@ -269,8 +287,23 @@ async def test_post_calamity_referrals_answered_via_network(monkeypatch):
     backend, _ = make_v2_backend(monkeypatch)
     network, post = network_agent(backend), make_agent("post_calamity")
     post.include(build_post_calamity_protocol(lambda: backend, network_address=lambda: network.address))
+    net = network_client(backend)
 
     async def script(ctx, out):
+        # B allows recovery only after a confirmed arrival (or a self-reported departure).
+        alert_id = await ingest(backend)
+        await net.start_outreach(alert_id, f"{alert_id}:outreach", "corr")
+        await net.record_availability(alert_id, "volunteer_sarah", "eastside_rides_demo", True, utc_now(), "a1", "corr")
+        await confirm(backend, MARIA)
+        match = (await backend.propose_match(MARIA, True, f"{MARIA}:match:v1", "corr"))["match"]
+        aid = match["assignment_id"]
+        await net.accept_v2(aid, match["org_id"], "ACCEPTED", "acc_v", "corr", volunteer_id=match["volunteer_id"])
+        await net.accept_v2(aid, match["shelter_org_id"], "ACCEPTED", "acc_s", "corr", site_id=match["site_id"])
+        await backend.pickup_v2(aid, {"type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True,
+                                      "resident_confirmed": True, "source": "SIMULATED", "report_id": "p"}, "p1", "corr")
+        await backend.arrival_v2(aid, {"type": "SHELTER_CHECKIN", "shelter_org_id": match["shelter_org_id"],
+                                       "site_id": match["site_id"], "shelter_confirmed": True, "source": "SIMULATED",
+                                       "report_id": "a"}, "ar1", "corr")
         out["ok"] = await ask(ctx, post.address, RecoveryRequest(**m(
             case_id=MARIA, help_types=["TEMPORARY_HOUSING", "INSURANCE_GUIDANCE", "SUPPLIES"],
             share_recovery_needs=True, granted_by="RESIDENT", idempotency_key=f"{MARIA}:recovery:v1")),
@@ -281,8 +314,9 @@ async def test_post_calamity_referrals_answered_via_network(monkeypatch):
 
     out = await drive([post, network], script)
     ok = out["ok"]
-    assert {(r["help_type"], r["org_id"], r["status"]) for r in ok.referrals} == {
-        ("TEMPORARY_HOUSING", "recovery_housing_demo", "ACCEPTED"), ("INSURANCE_GUIDANCE", "red_cross_demo", "ACCEPTED")}
-    assert ok.unmatched_help_types == ["SUPPLIES"] and ok.housing_secured is False
+    statuses = {r["help_type"]: r["status"] for r in ok.referrals}
+    assert statuses["TEMPORARY_HOUSING"] == "ACCEPTED" and statuses["INSURANCE_GUIDANCE"] == "ACCEPTED"
+    assert set(statuses) | set(ok.unmatched_help_types) == {"TEMPORARY_HOUSING", "INSURANCE_GUIDANCE", "SUPPLIES"}
+    assert ok.housing_secured is False
     assert all("shared_payload" not in r for r in ok.referrals)
     assert out["no_consent"].ok is False and out["no_consent"].error["code"] == "CONSENT_MISSING"

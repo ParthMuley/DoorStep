@@ -48,6 +48,7 @@ def build_matching_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> Pro
 
 def main() -> None:
     agent = build_agent("doorstep_matching", seed_for("MATCHING_SEED"), role_port("MATCHING"), "matching.md",
+                        "matching",
                         "DOORSTEP DEMO: deterministic matching of residents to available, capable volunteers "
                         "and accessible shelters, with explained reason codes.")
     agent.include(build_matching_protocol(lambda: DoorstepBackendV2()), publish_manifest=True)

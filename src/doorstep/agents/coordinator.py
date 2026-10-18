@@ -26,7 +26,7 @@ from uagents_core.contrib.protocols.chat import (
 )
 
 from doorstep.agents import coordinator_actions as actions
-from doorstep.agents.base import address_for
+from doorstep.agents.base import address_for, register_with_backend
 from doorstep.agents.journey import Journey
 from doorstep.integrations.agentverse_setup import enable_auto_mailbox
 from doorstep.integrations.asi_cards import DEMO_PREFIX, Card, parse_card_selection, text_message
@@ -71,6 +71,7 @@ agent = Agent(
     handle_messages_concurrently=True,
 )
 enable_auto_mailbox(agent, PORT)
+register_with_backend(agent, "doorstep")
 
 chat_proto = Protocol(spec=chat_protocol_spec)
 journey_proto = Protocol(name="doorstep_journey", version="2.0")

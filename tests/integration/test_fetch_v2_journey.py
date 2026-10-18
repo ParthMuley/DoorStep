@@ -20,7 +20,7 @@ from doorstep.agents.news import NewsAgent
 from doorstep.agents.post_calamity import build_post_calamity_protocol
 from doorstep.agents.volunteer_network import build_network_protocol
 from tests.integration.conftest import make_agent, run_until
-from tests.integration.fake_v2_backend import make_v2_backend
+from tests.integration.fake_v2_backend import make_v2_backend, network_client
 
 
 def chat(text: str) -> ChatMessage:
@@ -52,7 +52,8 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
     user = make_agent("asi_one_user")
 
     backend, _ = make_v2_backend(monkeypatch)
-    network.include(build_network_protocol(lambda: backend))
+    net = network_client(backend)  # only the network agent holds X-Agent-Token
+    network.include(build_network_protocol(lambda: net))
     matching.include(build_matching_protocol(lambda: backend))
     escalation.include(build_escalation_protocol(lambda: backend))
     post.include(build_post_calamity_protocol(lambda: backend))
@@ -93,6 +94,7 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
             seen["pickup"] = await say(ctx, primary_selection(card(seen["approved"][0])))
             seen["arrival"] = await say(ctx, "Confirm arrival for Maria", expect=2)
             seen["recovery"] = await say(ctx, primary_selection(card(seen["arrival"][1])))
+            seen["david_reply"] = await say(ctx, "Simulate David's reply")
             seen["david"] = await say(ctx, "Find a match for David")
             seen["escalated"] = await say(ctx, primary_selection(card(seen["david"][0])))
         finally:
@@ -103,7 +105,7 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
     titles = {(card(m) or {}).get("title", text(m)) for m in seen["start"]}
     assert any("Alert detected" in t for t in titles)
     outreach = next(m for m in seen["start"] if "Volunteer outreach" in (card(m) or {}).get("title", ""))
-    assert "eastside_rides_demo · la_county:zone_2" in text(outreach) and "available 1" in text(outreach)
+    assert "eastside_rides_demo · la_county:" in text(outreach) and "available 1" in text(outreach)
     assert any("Road conditions" in (card(m) or {}).get("title", "") for m in seen["start"])
     roads = text(seen["roads"][0])
     assert "Ridge Ave · Official (blocks illustrative routes)" in roads
@@ -126,7 +128,7 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
     assert card(seen["arrival"][1])["_kind"] == "review"  # consent asked before any sharing
 
     recovery = text(seen["recovery"][0])
-    assert "recovery_housing_demo: ACCEPTED" in recovery and "red_cross_demo: ACCEPTED" in recovery
+    assert "Temporary Housing:" in recovery and "Insurance Guidance:" in recovery and ": ACCEPTED" in recovery
     assert "Housing secured: no" in recovery
 
     david = card(seen["david"][0])

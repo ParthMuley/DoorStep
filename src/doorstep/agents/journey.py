@@ -178,7 +178,7 @@ class Journey:
         if result is None:
             rows = [("Volunteer Network", "no answer yet; no volunteer is treated as available")]
         else:
-            rows = [(f"{o['org_id']} · {o.get('region_id') or '-'} ({o.get('distance_km')} km)",
+            rows = [(f"{o['org_id']} · {', '.join(o.get('region_ids') or []) or '-'} ({o.get('distance_km')} km)",
                      f"asked {len(o.get('asked', []))} · available {len(o.get('available', []))} · "
                      f"waiting {len(o.get('awaiting_reply', []))} · unavailable {len(o.get('unavailable', []))}")
                     if "error" not in o else ("Outreach", f"failed: {o['error'].get('code')}")
@@ -294,7 +294,7 @@ class Journey:
         except (BackendError, OSError) as err:
             return self.refused(err)
         j.steps["PICKUP_CONFIRMED"] = res.get("confirmed_pickup_at")
-        j.map, j.next_step = res.get("map", j.map), "Awaiting arrival check-in at the shelter."
+        j.map, j.next_step = await self.case_map(case_id, corr, res), "Awaiting arrival check-in at the shelter."
         return self.journey_card(case_id, res.get("resident_status"),
                                  note="Pickup confirmed by the volunteer's report + simulated resident confirmation.")
 
@@ -316,10 +316,19 @@ class Journey:
         except (BackendError, OSError) as err:
             return self.refused(err)
         j.steps["ARRIVAL_CONFIRMED"] = res.get("confirmed_arrival_at")
-        j.map, j.next_step = res.get("map", j.map), "Ask whether the resident wants further help."
+        j.map, j.next_step = await self.case_map(case_id, corr, res), "Ask whether the resident wants further help."
         return [self.journey_card(case_id, res.get("resident_status"), note="Arrival confirmed by shelter check-in."),
                 recovery_consent_card(case_id=case_id, display_name=NAMES.get(case_id, case_id),
                                       help_types=DEFAULT_HELP_TYPES)]
+
+    async def case_map(self, case_id: str, corr: str, step_response: dict[str, Any]) -> dict[str, str]:
+        """Status color/label always from B: the step response if it has one, else the case record."""
+        if step_response.get("map"):
+            return step_response["map"]
+        try:
+            return (await self.get_backend().get_case_status(case_id, corr)).get("map") or self.case(case_id).map
+        except (BackendError, OSError):
+            return self.case(case_id).map
 
     def journey_card(self, case_id: str, resident_status: str | None, note: str) -> Card:
         j = self.case(case_id)
