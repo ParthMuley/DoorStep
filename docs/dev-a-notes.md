@@ -29,3 +29,21 @@ Reviewed `docs/interface-contract.md` v2.0 rev 2 and `docs/DOORSTEP_V2_TEAM_PLAN
 8. **Incremental delivery helps A most.** A consumes endpoints in this order: `/alerts/ingest` + `/alerts/active` + `/demo/alerts/trigger` → `/orgs/{id}/outreach` + volunteers + availability → `/matches/propose` + `/accept` → pickup/arrival → escalate/ack → recovery → closures → routes → dashboard. Small PRs in that order let A switch without waiting for the whole Mongo port.
 9. **Live demo DB.** Will a local MongoDB or Atlas run the live demo? A needs `MONGODB_URI` to start B's backend for live agent runs.
 10. **The 4 agent tests timing out on B's machine** come from network calls at Bureau startup (Almanac/ledger registration). A is fixing this in `tests/integration/conftest.py`, so no change is needed on B's side.
+
+### V2 agents built against contract v2.0 (2026-10-17, branch `feat/fetch-agents`)
+- **New agents** (`src/doorstep/agents/`):
+  - `organization.py`: one generic agent, run per org (`python -m doorstep.agents.organization <org_id>`).
+  - `calamity_checker.py`, `matching.py`, `escalation.py`, `post_calamity.py`.
+  - Messages: `integrations/fetch_messages.py` (schema 2.0). Client: `workflows/backend_v2.py`.
+- **Against B's real code:** the Organization agent uses B's real `GET /orgs/{id}/volunteers` and `POST /orgs/{id}/volunteers/{vid}/availability` (merged from `feat/backend-geodata` d377125), and the `X-Org-Agent` scoping is enforced by B.
+- **Test double for the rest:** `tests/integration/fake_v2_backend.py`. It is B's real app with contract-shaped stand-ins inserted in front for routes B hasn't built yet:
+  - `/demo/feeds/caloes`, `/demo/alerts/trigger`, `/alerts/ingest`;
+  - `/orgs/{id}/outreach`;
+  - `/matches/propose`, `/assignments/{id}/accept|pickup|arrival`;
+  - `/cases/{id}/escalate`, `/escalations/{id}/ack`;
+  - `/cases/{id}/recovery`, `/recovery/{id}/respond`.
+
+  **B: delete each stand-in when your real route lands; A's tests must then pass against your code.**
+- **Demo personas:** volunteer and shelter answers are simulated from `agents/fixtures/volunteer_personas.json` (Sarah YES, Joe YES, Maya no reply, Lee YES). `DECLINE_VOLUNTEERS=volunteer_sarah` forces the decline → next-alternate path.
+- **Tests:** `tests/integration/test_fetch_v2_agents.py`, 7 agent-pair tests, offline. They cover outreach, the 3 identical polls → 1 notification rule, failed-fetch backoff, Maria's match → accept → pickup → arrival, decline → Lee, David's receipt-only escalation, and the recovery referrals plus the no-consent case.
+- **Not yet:** the Doorstep coordinator doesn't drive the V2 flow yet (the next step; it needs B's real endpoints or the double in a dev server); News and Route agents; LangGraph.
