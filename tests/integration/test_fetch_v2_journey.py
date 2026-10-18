@@ -65,7 +65,10 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
         return True, 200, await backend._request("GET", "/demo/feeds/caloes", "corr"), None
 
     calamity.include(CalamityChecker(lambda: backend, fetch, coordinator_address=lambda: doorstep.address).protocol(3600))
-    news.include(NewsAgent(lambda: backend, coordinator_address=lambda: doorstep.address).protocol(3600))
+    from doorstep.integrations.closure_extraction import ClosureExtractor
+    from tests.integration.test_fetch_news import keyword_backed_model
+    news.include(NewsAgent(lambda: backend, ClosureExtractor(client=keyword_backed_model(), model="m"),
+                           coordinator_address=lambda: doorstep.address).protocol(3600))
     here = FakeHere(here_response(GOOD))  # HERE is mocked: no paid calls in tests
     route.include(RouteAgent(lambda: backend, HereRouter(api_key="test-key", transport=here.transport)).protocol())
     for role, a in (("MATCHING", matching), ("ESCALATION", escalation), ("POSTCALAMITY", post),

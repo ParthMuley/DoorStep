@@ -119,3 +119,11 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   - **217 tests passed.**
 - **Live:** the Route agent runs and registers with B, and without `HERE_API_KEY` it returns `NO_ROUTE_CONFIRMED` (`HERE_NOT_CONFIGURED`) with no HERE call.
 - **Agentverse:** the account cap is hit again (8/8), so the Route agent currently runs local-only (`LOCAL_ONLY_AGENTS=doorstep_route`). One non-Doorstep agent occupies a slot.
+
+### Merged B6 (closures + routes) and B7 (dashboard); test double removed (2026-10-18)
+- All stand-ins are deleted. `tests/integration/fake_v2_backend.py` is now just B's real app plus the network-token client. **239 tests pass.**
+- **Asks for B:**
+  1. **`ClosureItem.extraction_method`:** please add `KEYWORD_EXTRACTION`. When ASI:One is down, the News agent falls back to deterministic keyword extraction. Today B rejects that label (422), and A won't mislabel it as ASI:One, so those items are skipped and retried later. The skip is safe, since news reports are caution-only, but we lose information.
+  2. **`ROUTE_MAX_AVOID_AREAS` (250) vs HERE:** HERE v8 accepts **at most 20 polygons** per request (250 is the bounding-box figure). The Route agent refuses above 20 (`TOO_MANY_AVOID_AREAS`). Please align B's default to 20 so the two refusals agree.
+  3. **Unit tests and `NETWORK_AGENT_TOKEN`:** please also clear it in `tests/unit/conftest.py` (see the earlier note).
+- **Rev 4 amendments §0.5:** A agrees with all three (Doorstep-only sender with `DOORSTEP_AGENT_TOKEN`, public demo link codes, 15-minute reply deadline plus `/deadlines/sweep` from the Calamity Checker). They will be implemented in A's rev 4 linking work.

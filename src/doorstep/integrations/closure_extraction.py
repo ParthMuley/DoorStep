@@ -19,7 +19,7 @@ from doorstep.integrations.asi_one_client import ASI_ONE_BASE_URL, DEFAULT_MODEL
 
 log = logging.getLogger("doorstep.closure_extraction")
 
-STATUSES = ["CLOSED", "OPEN", "RESTRICTED", "UNCLEAR"]
+STATUSES = ["CLOSED", "OPEN", "RESTRICTED", "UNKNOWN"]  # B's ClaimedStatus enum
 EXTRACT_TOOL = {"type": "function", "function": {
     "name": "report_road_claim",
     "description": "Record what the article CLAIMS about a road, if anything. Do not judge whether it is true.",
@@ -48,7 +48,7 @@ def keyword_candidate(text: str) -> dict[str, Any] | None:
         return None
     lowered = text.lower()
     status = ("OPEN" if any(w in lowered for w in OPEN_WORDS)
-              else "CLOSED" if any(w in lowered for w in CLOSED_WORDS) else "UNCLEAR")
+              else "CLOSED" if any(w in lowered for w in CLOSED_WORDS) else "UNKNOWN")
     return {"road_name": match.group(1), "claimed_status": status, "location_text": ""}
 
 

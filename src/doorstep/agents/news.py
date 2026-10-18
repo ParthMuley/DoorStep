@@ -26,6 +26,10 @@ from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
 
 load_dotenv()
 
+# Extraction methods B's contract accepts (v2.1 ClosureItem.extraction_method). A asked B to add
+# KEYWORD_EXTRACTION for the deterministic fallback (dev-a-notes, 2026-10-18).
+POSTABLE_METHODS = {"ASI_ONE_EXTRACTION", "STRUCTURED_FEED"}
+
 
 class NewsAgent:
     def __init__(self, get_backend: Callable[[], DoorstepBackendV2], extractor: ClosureExtractor | None = None,
@@ -62,6 +66,11 @@ class NewsAgent:
                     continue
                 text = f"{n.get('headline', '')}\n{n.get('body', '')}"
                 candidate, method = await self.extractor.extract(text)
+                if method not in POSTABLE_METHODS:
+                    # B's contract has no KEYWORD_EXTRACTION label yet; never mislabel it as ASI:One.
+                    # Not marked seen, so the item is retried when ASI:One extraction is back.
+                    ctx.logger.warning(f"[{corr}] skipped {n['item_id']}: {method} not accepted by backend yet")
+                    continue
                 self.seen.add(n["item_id"])
                 if candidate is None:
                     continue  # no road claim in this article
