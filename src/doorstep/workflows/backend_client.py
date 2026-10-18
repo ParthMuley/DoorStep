@@ -38,8 +38,9 @@ class DoorstepBackend:
         self._timeout = timeout
 
     async def _request(self, method: str, path: str, correlation_id: str, json: dict | None = None,
-                       params: dict | None = None) -> dict[str, Any]:
-        headers = {"Authorization": f"Bearer {self.token}", "X-Correlation-ID": correlation_id}
+                       params: dict | None = None, extra_headers: dict[str, str] | None = None) -> dict[str, Any]:
+        headers = {"Authorization": f"Bearer {self.token}", "X-Correlation-ID": correlation_id,
+                   **(extra_headers or {})}
         async with httpx.AsyncClient(base_url=self.base_url, transport=self._transport,
                                      timeout=self._timeout) as client:
             resp = await client.request(method, path, json=json, params=params, headers=headers)

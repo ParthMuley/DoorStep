@@ -1,0 +1,12 @@
+{
+  "_note": "DOORSTEP DEMO - how each fictional org's simulated volunteers/sites answer. availability: YES | NO | NO_REPLY. on_assignment: ACCEPT | DECLINE. Override at runtime with DECLINE_VOLUNTEERS=volunteer_sarah,...",
+  "volunteers": {
+    "volunteer_sarah": {"availability": "YES", "on_assignment": "ACCEPT"},
+    "volunteer_joe": {"availability": "YES", "on_assignment": "ACCEPT"},
+    "volunteer_maya": {"availability": "NO_REPLY", "on_assignment": "ACCEPT"},
+    "volunteer_lee": {"availability": "YES", "on_assignment": "ACCEPT"}
+  },
+  "default_volunteer": {"availability": "NO_REPLY", "on_assignment": "DECLINE"},
+  "shelter_sites": {"dest_center_a": "ACCEPT", "rc_shelter_1": "ACCEPT"},
+  "recovery_referrals": "ACCEPT"
+}
