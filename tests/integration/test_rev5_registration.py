@@ -142,3 +142,4 @@ async def test_resident_and_volunteer_register_themselves(monkeypatch):
     assert "eastside_rides_demo" in seen["orgs"] and "unlisted_vans_demo" not in seen["orgs"]
     assert "must approve you" in text(seen["vlinked"])
     assert "Rosa (synthetic)" in title(seen["checkin"])  # a self-registered resident gets a real check-in
+    assert "Aviso SIMULADO" in text(seen["checkin"])  # in the language Rosa chose on the form ("es")

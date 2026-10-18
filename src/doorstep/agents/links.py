@@ -26,6 +26,7 @@ class Link:
     volunteer_id: str | None = None   # volunteers
     org_id: str | None = None         # volunteers
     backend_sender: str | None = None  # the linked ASI:One address (B v2.2 accepts it with the Doorstep token)
+    language: str | None = None       # residents: "en" | "es" (their profile's preferred language)
 
 
 MENTION = re.compile(r"^\s*(?:@\S+\s*)+")  # ASI:One prefixes messages with "@agent1q..." mentions
@@ -43,7 +44,7 @@ def link_from_backend(address: str, res: dict[str, Any]) -> Link:
     person = res.get("resident_id") or res.get("volunteer_id") or res.get("coordinator_id") or ""
     return Link(address=address, role=role, person_id=person, display_name=res.get("display_name", person),
                 case_id=res.get("case_id"), volunteer_id=res.get("volunteer_id"), org_id=res.get("org_id"),
-                backend_sender=address)
+                backend_sender=address, language=res.get("language") or res.get("preferred_language"))
 
 
 class LinkRegistry:
@@ -55,7 +56,8 @@ class LinkRegistry:
             return self._by_address[address]
         raw = ctx.storage.get(f"link:{address}") if ctx is not None else None
         if raw:
-            self._by_address[address] = Link(**json.loads(raw))
+            known = Link.__dataclass_fields__  # links stored before a field existed still load
+            self._by_address[address] = Link(**{k: v for k, v in json.loads(raw).items() if k in known})
         return self._by_address.get(address)
 
     def put(self, ctx: Any, link: Link) -> None:

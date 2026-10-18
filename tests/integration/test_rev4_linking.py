@@ -134,7 +134,7 @@ async def test_three_linked_people_run_maria_end_to_end(monkeypatch):
             seen["spent"] = await inbox["stranger"].wait(lambda m: "CODE_SPENT" in text(m))
 
             await say("coord", "Start the simulated Zone 3 readiness check")
-            checkin = await inbox["resident"].wait(lambda m: "Check-in" in title(m))
+            checkin = seen["checkin"] = await inbox["resident"].wait(lambda m: "Check-in" in title(m))
             availability = await inbox["volunteer"].wait(lambda m: "Are you available" in title(m))
             seen["outreach"] = await inbox["coord"].wait(lambda m: "Volunteer outreach" in title(m))
 
@@ -184,6 +184,7 @@ async def test_three_linked_people_run_maria_end_to_end(monkeypatch):
     assert "Link this chat first" in text(seen["stranger"])
     assert "Linked as coordinator" in text(seen["link_coord"]) and "Linked as Maria" in text(seen["link_resident"])
     assert "CODE_SPENT" in text(seen["spent"])  # demo codes work once
+    assert "Aviso SIMULADO" in text(seen["checkin"])  # Maria's profile language (es), read from her case at alert time
     assert "SYNTHETIC: Zone 3 Sector B meeting point" not in text(seen["assignment"])  # pickup point private
     assert "ILLUSTRATIVE_ONLY" in text(seen["route"]) and len(here.calls) == 1
     assert "both the volunteer and the resident in their own chats" in text(seen["picked"])

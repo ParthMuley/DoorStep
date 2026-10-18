@@ -53,7 +53,7 @@ def choice_card() -> Card:
 
 def resident_form(error: str = "") -> Card:
     fields = [{"name": "name", "kind": "text", "label": "Name (a nickname is fine)", "required": True},
-              {"name": "language", "kind": "select", "label": "Language",
+              {"name": "language", "kind": "select", "label": "Preferred language (for check-ins)",
                "options": [{"value": "en", "label": "English"}, {"value": "es", "label": "Español"}]},
               {"name": "address", "kind": "text", "label": ADDRESS_HINT, "required": True}]
     fields += [{"name": f"need_{c}", "kind": "checkbox", "label": label} for c, label in NEEDS.items()]
@@ -163,5 +163,7 @@ class Registration:
             return None, f"Registration was refused ({err.code}: {err.detail}). Nothing was stored."
         except (OSError, ValueError):
             return None, "Registration is unavailable right now. Nothing was stored."
+        if p.role == "RESIDENT":
+            link.language = f.get("language") or "en"  # the check-in card speaks it
         del self.pending[sender]
         return link, ""

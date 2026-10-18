@@ -140,9 +140,15 @@ class Journey:
         for c in msg.affected_cases:  # rev 4: linked residents get their own check-in card
             resident = self.people.resident_for_case(c["case_id"])
             if resident:
+                if not resident.language:  # linked by code: the case (created by this alert) has the profile language
+                    try:
+                        view = await self.get_backend().get_case_status(c["case_id"], msg.correlation_id)
+                        resident.language = (view.get("case") or view).get("preferred_language")
+                    except (BackendError, OSError):
+                        pass
                 await self.send_to(ctx, resident.address, checkin_card(
                     case_id=c["case_id"], display_name=resident.display_name, zone_status=c.get("zone_status"),
-                    language="es" if c["case_id"] == "case_maria_001" else None))
+                    language=resident.language))
         if not msg.outreach_orgs:
             return
         alert_id = msg.outreach_orgs[0]["alert_id"]
