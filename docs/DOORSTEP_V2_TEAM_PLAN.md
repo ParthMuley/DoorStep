@@ -1,12 +1,74 @@
-# DOORSTEP V2 — Two-Person Plan (Fetch.ai track) — revision 3
+# DOORSTEP V2 — Two-Person Plan (Fetch.ai track) — revision 4
 
 *Shared plan for Developer A and Developer B. Both Claude Code sessions read this file. Change only by PR, agreed by both. Revision 2 (2026-10-17) re-aligned the plan with the team's original idea and switched to MongoDB. **Revision 3 (2026-10-17, proposed by A, agreed by B):**
 - no agent per organization: one Volunteer Network agent serves all partner orgs;
 - the partner database becomes location-first (`region → orgs → volunteers`), so finding the closest help to an evacuation zone is one geo query.
 
-See §0.*
+**Revision 4 (2026-10-17, proposed by A, pending B's agreement):**
+- residents and volunteers use **their own ASI:One accounts** instead of simulated SMS;
+- the **Route agent** design is fixed (HERE Routing v8, avoid areas from B only, B post-check);
+- §17 explains how to get a HERE API key.
 
-## 0. What changed in revision 3 (and why)
+See §0 (rev 4) and §0b (rev 3).*
+
+## 0. What changed in revision 4 (and why)
+
+| Change | Why |
+|---|---|
+| **Residents and volunteers chat with the Doorstep agent in their own ASI:One accounts.** No more simulated SMS on the main path. | Fetch.ai/ASI:One can't send SMS or push notifications to people who haven't talked to an agent. An ASI:One user who has messaged the Doorstep agent **can** receive agent-initiated messages (verified live 2026-10-17). So everyone who must be reached (resident, volunteer, coordinator) needs an ASI:One account and links it once. The Fetch.ai track then shows real people acting through agents, not a simulator. |
+| **One entry point:** every person talks to the **Doorstep agent**. Other agents never message people directly; they ask Doorstep to notify (Volunteer Network → Doorstep → volunteer). | ASI:One users only reach agents they chat with. One "face" keeps registration, linking and push in one place. |
+| **Role-based cards** (resident / volunteer / coordinator), §0.2. | Each person sees only their part. Card clicks are the real answers: the resident's check-in reply, the volunteer's YES/accept, both pickup confirmations. |
+| **Route agent design fixed** (§0.3): HERE Routing v8, multi-stop volunteer → pickup → shelter, avoid areas only from B, refuse instead of truncate, B's Shapely post-check, no LLM in routing. The route card goes to the **volunteer**. | The team's sample HERE agent was a chat assistant where the LLM chose user-supplied "blocked roads". Our safety rules need official-only blocks and an independent check. |
+| The SMS simulator stays only as a **fallback** for unanswered steps, automated tests and the offline demo. | Tests and the smoke test must run without ASI:One accounts. |
+| **Contract v2.2** (B): ASI:One contact channel, link codes, "notify" lists instead of SMS sends, resident pickup confirmation (§0.4). | Answers A's review items 4–5. |
+
+### 0.1 Linking an ASI:One account (before a calamity)
+- **First chat:** the Doorstep agent shows a link form card ("I'm a resident" / "I'm a volunteer"). Each role then sees its own cards.
+- **Demo:** pre-seeded people link with a **one-time code** from the seed, e.g. `LINK MARIA-4821`, `LINK SARAH-7310`, `LINK COORD-1150`. B stores their ASI:One address as their `contact`, and the code is then spent. A random account can't claim to be Maria.
+- **Coordinator / org staff** link the same way, with role `COORDINATOR`.
+- **Someone who never linked can't be reached.** Their case shows `communication_status: NOT_REACHABLE` and stays visible to the coordinator. In the pitch this is "enroll before a calamity".
+- **Demo accounts:** three consenting teammates on separate ASI:One accounts (resident, volunteer, coordinator), everything labeled DEMO.
+
+### 0.2 What each role sees (cards)
+| Role | Cards pushed to their ASI:One chat |
+|---|---|
+| **Resident** | Check-in card on a simulated official alert ("Do you need help?" Need help / Have a plan / Already left / Call me) → needs-confirmation card (the extracted needs; Confirm / Change) → "A volunteer accepted, about N min (estimate, not a guarantee)" → **"Confirm you were picked up"** → arrival → "Want further help?" consent card → referral status |
+| **Volunteer** | Availability card for an alert (Yes / No) → **assignment card**: consent-scoped needs, the **route card** (§0.3), pickup point shown only after Accept → Accept / Decline → **"Confirm pickup"** → done |
+| **Coordinator** | Alert, outreach, operations board, unresolved queue, David's escalation, road conditions; can approve arrangements and trigger demo controls |
+
+### 0.3 Route agent (HERE Routing v8)
+```
+volunteer accepts → Doorstep → RouteRequest(assignment_id) → Route agent
+Route agent → B POST /routes/constraints → stops + avoid_areas + cautions   (or 409 ROUTE_REFUSED)
+Route agent → HERE GET /v8/routes  origin=volunteer, via=pickup, destination=shelter,
+              avoid[areas]=polygon:…|…, return=polyline,summary,actions,instructions
+Route agent → B POST /routes/previews (decoded polyline) → ILLUSTRATIVE_ONLY | REFUSED | NO_ROUTE_CONFIRMED
+Route agent → RouteResponse → Doorstep → route card to the volunteer (+ summary to the coordinator)
+```
+- **Kept from the team's sample:** the HERE v8 request shape, buffering closure lines into avoid polygons with Shapely in a local metric projection, the 250-area limit, refusing when HERE's `notices` report a violated avoid area, and the first N instructions.
+- **Changed for Doorstep:**
+  - **No LLM in routing.** It's a service agent: `RouteRequest` in, `RouteResponse` out.
+  - **Avoid areas come only from B:** active order-zone polygons plus **official-confirmed** closures. Unverified or conflicting reports are **cautions**, never blocks.
+  - **Refuse instead of truncating** (`TOO_MANY_AVOID_AREAS`).
+  - Polygons are simplified only in ways that **enlarge** them (buffer outward, then simplify or convex hull). HERE's per-polygon vertex limit must be checked in their docs.
+  - **No geocoding:** stops are B's synthetic coordinates. Any future geocoding refuses on an ambiguous result.
+  - **Multi-stop with `via`:** the first section's duration is the volunteer's ETA to the resident, the "about N min" in the help-on-the-way card.
+  - **`return=polyline`** (decoded with HERE's `flexpolyline` package) for B's independent Shapely post-check: no order-zone or official-closure crossing, data still fresh.
+  - **Secret seed** from `.env` (`ROUTE_SEED`), `httpx` async, idempotent per `assignment_id`.
+  - **Wording:** never "safe" or "clean"; always "ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION" and "ETA is an estimate, not a guarantee".
+- **Route card (volunteer):** distance, ETA to pickup and total, order zones and official closures avoided, cautions on the path (e.g. "Canyon Rd: unverified report"), the first ~6 directions, and the banner. A refusal shows the reason and no route.
+- **Map image (P1, after the text card works):** HERE Map Image API with the route and zone overlays, if its docs confirm overlay support. Its URL carries the API key, so the agent fetches it server-side and the image is hosted or embedded (≤64 KB card limit). Never expose the key in a card. Google Maps is **not** used.
+- **Tests:** HERE mocked with `httpx.MockTransport` (avoids zones / crosses an order zone / empty result); a HERE key is needed only for live runs.
+
+### 0.4 Contract v2.2 asks for B
+1. `residents` and `volunteers` gain `contact: {"channel": "ASI_ONE", "address": "agent1q…|user address", "linked_at"}`, plus seeded one-time `link_code`s. Add `POST /link {code, asi_one_address, role}` → `{role, resident_id | volunteer_id | coordinator_id}`, with 409 if the code is spent or unknown.
+2. Wherever B "sends a simulated SMS" today (check-ins, outreach, help-on-the-way, arrival follow-up), it returns a **`notify` list** instead: `[{"person_id", "role", "channel": "ASI_ONE", "address", "template_id", "language", "text"}]`. The Doorstep agent delivers it as cards. Templates stay human-reviewed text (Spanish reviewed). The simulator is used only when the channel is `SIM`.
+3. Inbound answers arrive through the existing endpoints with `sender` = the linked ASI:One address (B checks it against `contact.address`; unknown sender → 403): resident replies (`/cases/{id}/responses`) and volunteer availability (`/alerts/{id}/volunteers/{vid}/availability`).
+4. **Resident pickup confirmation:** `POST /assignments/{id}/pickup` accepts `{"evidence": {…, "resident_confirmed": true, "confirmations": [{"party": "resident", "party_id": "resident_001", "via": "ASI_ONE"}]}}` when the click comes from the resident's linked address. This settles review item 5.
+5. `communication_status` adds `NOT_REACHABLE` (never linked); still never treated as danger or safety.
+
+
+## 0b. What changed in revision 3 (and why)
 
 | Change | Why |
 |---|---|
@@ -29,13 +91,13 @@ See §0.*
 
 **During a calamity**
 3. **Calamity Checker** polls the government feed **every 2 minutes** (Cal OES evacuation zones, which include LA County). It finds the affected **zone polygons** and the calamity type (e.g. wildfire).
-4. **Doorstep Help** asks every registered resident **inside the affected zone** (who agreed to be contacted) whether they need help. Same message in their language, simulated SMS.
-5. **At the same time**, Doorstep finds the **regions closest to the evacuation zone** with one geo query, and the organizations inside them that handle this calamity type. The **Volunteer Network agent** asks those organizations' volunteers whether they're available (simulated SMS, sent on each org's behalf). Their yes/no answers are saved per alert in the partner (regions) DB.
+4. **Doorstep Help** asks every registered resident **inside the affected zone** (who agreed to be contacted) whether they need help, with a **check-in card in their linked ASI:One chat**, in their language (rev 4; simulated SMS only as fallback).
+5. **At the same time**, Doorstep finds the **regions closest to the evacuation zone** with one geo query, and the organizations inside them that handle this calamity type. The **Volunteer Network agent** asks those organizations' volunteers whether they're available (an availability card in each volunteer's ASI:One chat, delivered by the Doorstep agent on each org's behalf; rev 4). Their yes/no answers are saved per alert in the partner (regions) DB.
 6. **Matching agent** matches each resident who asked for help to an available volunteer whose capability codes cover all the resident's needs and whose vehicle fits. It also matches a shelter. Closest first, never ranking people.
 7. **News agent** reports which roads are blocked or areas inaccessible: **official** closures vs **unverified** news reports.
-8. **Route agent** (HERE, adapted from our route-agent code) gives the volunteer an illustrative route: volunteer → resident → shelter, avoiding order zones and official closures.
-9. The **volunteer confirms**. The resident is told **"help is on the way" with an estimated arrival time** (marked as an estimate, not a guarantee). This is only said after the volunteer has accepted.
-10. **Pickup** and **arrival** are confirmed separately. Green only at arrival.
+8. **Route agent** (HERE Routing v8; design in §0.3) gives the volunteer an illustrative route card in their ASI:One chat: volunteer → resident → shelter, avoiding order zones and **official** closures, with cautions for unverified reports, or a refusal.
+9. The **volunteer accepts** on their assignment card. The resident is then told, in their ASI:One chat, **"help is on the way" with an estimated arrival time** (marked as an estimate, not a guarantee). This is only said after the volunteer has accepted.
+10. **Pickup** (volunteer **and** resident each confirm in their own chat) and **arrival** (shelter check-in) are confirmed separately. Green only at arrival.
 
 **After evacuation**
 11. Doorstep asks if they need further help. **Post-Calamity agent** takes over: temporary housing, insurance guidance, supplies, etc. It matches recovery organizations and refers with consent. It never files claims or promises housing.
@@ -61,7 +123,7 @@ See §0.*
 | Zone detection | Shapely (`covers`: a point on the edge counts as inside; ORDER dominates) | B |
 | Road closures | News agent + ASI:One extraction; only official closures block roads | A gathers, B classifies |
 | Route planning | HERE Routing v8 (adapted from the team's route-agent code) | A agent, B gates and post-checks |
-| Notifications | Fetch.ai agent messages + ASI:One; residents and volunteers via B's SMS simulator | A + B |
+| Notifications | **ASI:One chats with the Doorstep agent** (rev 4). Residents, volunteers and coordinators link their accounts once, and the agent then pushes cards to them. B returns `notify` lists; the SMS simulator is only a fallback and test path | A + B |
 | Dashboard | ASI:One Interactive Cards (text fallback) | A renders, B supplies data |
 
 **Cut:** Sentry, Photon, Base44, web dashboard, Google Maps, scraping real news sites.
@@ -70,7 +132,7 @@ See §0.*
 
 | | Done | Changes with revision 2 |
 |---|---|---|
-| A | Done on `feat/fetch-agents` @ 4f20ddf:<br>• the Doorstep agent drives the full V2 journey live through Agentverse (alert push, outreach, match, approve, accept, pickup, arrival, recovery, David escalation), with cards and ASI:One tool calling<br>• Calamity, Matching, Escalation and Post-Calamity agents built<br>• per-org agents built, then **replaced in rev 3** by one Volunteer Network agent | Still to do: the Volunteer Network agent, the News and Route agents, and the switch to the v2.1 endpoints |
+| A | Done on `feat/fetch-agents` @ 4b578d2 (live on Agentverse, 7 of 8 agents on mailboxes):<br>• Doorstep drives the full V2 journey from ASI:One (alert push, outreach, match, approve, accept, pickup, arrival, recovery, David escalation) with cards and ASI:One tool calling<br>• Calamity Checker, Volunteer Network (rev 3), Matching, Escalation, Post-Calamity, News (ASI:One claim extraction) agents<br>• tested against B's app + a contract-shaped test double for routes not yet built | Still to do: Route agent (HERE, §0.3); rev 4 account linking + role cards; switch from the test double to B's real v2.1 routes; thin LangGraph |
 | B | Done on `feat/backend-geodata` @ 27e6295:<br>• MongoDB (2 DBs, mongomock tests, real-server test)<br>• B2 registration + needs codes<br>• B3 Cal OES-shaped feed, `/alerts/ingest`, Shapely geofencing, STALE/UNKNOWN, outreach list, volunteer outreach<br>• B4 `/matches/propose`, reservation, accept/decline, v2 pickup/shelter check-in, escalate + ack, Scenarios A/B/C v2 (158 unit tests)<br>• contract v2.1 written for rev 3 | Still to do: move partners to location-first `regions` + the v2.1 network endpoints (replacing the per-org ones), resident pickup SMS, `PUT /agents/{role}`; then B5 post-calamity, B6 closures + routes, B7 card data |
 | Open issue | 4 of A's agent tests time out on B's machine | check together first |
 
@@ -78,12 +140,12 @@ See §0.*
 
 | Agent | Does | Never does |
 |---|---|---|
-| **Doorstep** (Coordinator + Doorstep Help) | ASI:One entry point (Chat Protocol), ASI:One API tool-calling, LangGraph; triggers resident check-ins (B sends the simulated SMS); renders cards; tells the resident "help is on the way" + ETA only after the volunteer accepts | decide eligibility or safety; claim dispatch |
+| **Doorstep** (Coordinator + Doorstep Help) | the **only** agent people talk to in ASI:One (Chat Protocol). Links accounts to roles (§0.1), delivers B's `notify` lists as role cards (§0.2), and takes card clicks as the real answers. Uses ASI:One API tool calling for free text, plus LangGraph. Tells the resident "help is on the way" + ETA only after the volunteer accepts | decide eligibility or safety; claim dispatch; message a person who never linked |
 | **Calamity Checker** | `on_interval(120s)`: fetch feed → `POST /alerts/ingest` → `AlertNotification` (zones, calamity type, affected residents) to Doorstep | interpret status itself; use a radius as an order |
 | **Volunteer Network** (one agent for all partner orgs) | **Outreach:** on an `OutreachRequest` for an alert, has B pick the regions near the zone and the matching orgs in them, sends each of their volunteers a simulated "available?" message on the org's behalf, records the answers per alert, and replies with counts per org.<br>**Assignments:** forwards a volunteer's accept/decline and a shelter's bed confirmation.<br>**Journey:** reports pickup (volunteer) and arrival (shelter check-in).<br>**Recovery:** answers referrals for recovery orgs. | rank people; read the residents DB; forward pickup points or phones back to Doorstep |
 | **Matching** | calls B's deterministic `matches/propose` and returns the explained result (wrapper; B's code decides) | match with an LLM |
 | **News / Road-closure** | polls synthetic news + official-closure feeds; ASI:One extracts candidate `{road, claimed_status}`; posts to `/closures/ingest` with an honest source type | label anything official; treat "no reports" as "open" |
-| **Route** (HERE) | gets avoid-areas from B → calls HERE → submits the polyline to B's post-check → returns the illustrative route + ETA or a refusal | say "safe"; use unverified closures as blocks |
+| **Route** (HERE) | on `RouteRequest(assignment_id)`: gets stops + avoid areas (order zones + official closures) + cautions from B → HERE v8 multi-stop route → submits the polyline to B's post-check → `RouteResponse` with the illustrative route, ETA to pickup and directions, or a refusal (§0.3) | say "safe"; use unverified closures as blocks; truncate avoid areas; use an LLM to choose routing inputs |
 | **Post-Calamity** | after arrival + consent: matches recovery orgs by help type (housing, insurance guidance, supplies…), sends a consent-scoped referral, reports accepted/completed | file claims; promise housing |
 | **Escalation Simulator** | `ACKNOWLEDGED_REQUEST_ONLY` receipts for order-zone cases | imply responders were dispatched |
 
@@ -196,7 +258,8 @@ Also `provider_events` (reservations, with a dedupe key) and `counters`.
 | `GET /demo/feeds/news`, `GET /demo/feeds/closures`, `POST /closures/ingest`, `GET /closures` | news + official closures; B sets OFFICIAL_CONFIRMED / UNVERIFIED_REPORT / CONFLICTING / EXPIRED |
 | `POST /routes/constraints`, `POST /routes/previews` | avoid areas (order zones + official closures) and cautions for volunteer → resident → shelter; HERE polyline post-check → ILLUSTRATIVE_ONLY / REFUSED / NO_ROUTE_CONFIRMED + ETA label |
 | `GET /dashboard/summary`, `GET /dashboard/cases` | card data |
-| `/sim/*` | simulated SMS for residents **and volunteers** (inbound, delivery, deadline) |
+| `/sim/*` | simulator **fallback** for residents and volunteers without a linked ASI:One account, and for tests (inbound, delivery, deadline) |
+| `POST /link` | *(rev 4, v2.2)* link an ASI:One address to a resident, volunteer or coordinator with a one-time code |
 
 States: Assistance `UNKNOWN, NEEDS_ASSISTANCE, PROVIDER_ACCEPTED, PICKUP_CONFIRMED, ARRIVAL_CONFIRMED, REQUIRES_COORDINATOR`; Assignment `PROPOSED, AWAITING_PROVIDER, ACCEPTED, DECLINED, CANCELED, COMPLETED, UNRESOLVED`; Zone `ORDER, WARNING, SHELTER_IN_PLACE, OUTSIDE_KNOWN_ZONES, UNKNOWN, STALE`; Recovery `NOT_REQUESTED, REQUESTED, ACCEPTED, COMPLETED, UNRESOLVED`; Volunteer availability `UNASKED, ASKED, AVAILABLE, UNAVAILABLE, NO_REPLY`.
 
@@ -224,7 +287,7 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
   - Refresh is documented as both 5 and 10 min; features vanish for 15 s–1 min during rebuilds. So cancel only on an explicit NORMAL **or** after 2 consecutive polls missing the record.
   - `EVENT_TYPE` was null live, so the calamity type may need a fallback: `UNKNOWN` type → contact orgs supporting `ANY`/all types.
 - **ASI:One API:** OpenAI-compatible, `asi1-mini`, tool calling, structured output.
-- **HERE (team route code):** reuse geocode, avoid-polygon buffering and the tool loop. Fix:
+- **HERE (team route code):** reviewed in rev 4; see §0.3 for what is kept and changed. Summary of fixes:
   - closures come from B (official only), not user input;
   - **refuse instead of truncating** above the avoid-area limit;
   - secret seed from env;
@@ -242,7 +305,8 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
   - **Volunteer Network agent** (rev 3): replaces the per-org agents. Runs outreach for all orgs near an alert, forwards acceptances, reports pickup/arrival, and answers recovery referrals.
   - Matching (done).
   - News.
-  - Route (adapt the team's HERE code per §9).
+  - Route (HERE v8, §0.3), with the route card for the volunteer.
+  - Rev 4: account linking + role cards in the Doorstep agent (§0.1–0.2); Volunteer Network asks Doorstep to message volunteers.
   - Post-Calamity (done).
   - Escalation (done).
   - All 8 on Agentverse with profiles, which fits the account's 8-agent cap.
@@ -269,6 +333,7 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
 - **B4 — matching + states:** decision 7, explained reason codes, volunteer reservation, accept/decline, next volunteer on decline, escalation + ack, Scenario C.
 - **B5 — post-calamity:** help types, consent-scoped referral payload, recovery-org matching by `recovery_services`, accepted/completed with evidence.
 - **B6 — closures + routes:** feeds, `/closures/ingest` with deterministic states and a road gazetteer; `/routes/constraints` (volunteer → resident → shelter, avoid order zones + official closures, cautions for unverified, refuse if stale or too many areas) and `/routes/previews` post-check.
+- **B8 — rev 4 (contract v2.2, §0.4):** ASI:One contact channel + link codes + `POST /link`; `notify` lists instead of simulated SMS on the main path; inbound answers checked against the linked address; resident pickup confirmation; `NOT_REACHABLE`. The simulator stays for `SIM` contacts and tests.
 - **B7 — card data, API, scripts, docs:**
   - `/dashboard/*`, `progress_steps`, `summary_text`.
   - Scenarios A, B, C + outreach + route refusal in `demo/scenarios.py`.
@@ -284,7 +349,7 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
 | C2 | client on v2.1, Calamity agent, Volunteer Network agent | Mongo port, location-first regions + geo query, registration, ingest + geofence, outreach | alert → check-ins + volunteer outreach near the zone, end to end |
 | C3 | Matching, accept via the Volunteer Network agent, cards for match/case | matching, reservation, evidence | **Maria matched, accepted, picked up, arrived in ASI:One** |
 | C4 | Escalation + Post-Calamity agents | escalation ack, recovery referrals | **David unresolved; Maria post-calamity referral** |
-| C5 | News + Route (HERE) agents, road/route cards | closures, route constraints + post-check, FREEZE_FEED | **route avoids official closure, cautions on unverified, refusal; Scenario C** |
+| C5 | News + Route (HERE) agents, road conditions + **volunteer route card**, account linking + role cards | closures, route constraints + post-check, FREEZE_FEED, contract v2.2 (link, notify) | **three teammates on three ASI:One accounts run Maria end to end; route avoids the official closure and cautions on the unverified one; refusal; Scenario C** |
 | C6 | all agents on Agentverse, shared chat, video | README, smoke, reset, Spanish review | **freeze → merge to `main` → rehearse from reset** |
 
 **No-wait rule:** A tests against B's real app in-process (mongomock-backed); B tests API-only with a fake agent caller. HERE and ASI:One are mocked on both sides.
@@ -325,3 +390,18 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
 
 **Developer B:**
 > You are Developer B on Doorstep V2 (Fetch.ai track). Read `docs/DOORSTEP_V2_TEAM_PLAN.md` (revision 3), `docs/interface-contract.md`, and the two spec documents. Work on `feat/backend-geodata` in B-owned files only (§6.9). First revise the contract to v2.1 for revision 3 (location-first regions, `/regions/near`, `/alerts/{id}/outreach`, network accept) and send A the hash. Then finish MongoDB storage (two DBs, location-first `regions` documents with 2dsphere indexes + Shapely fallback, §5 shapes, atomic conditional updates, mongomock tests), add needs codes and registration, the Cal-OES-shaped synthetic feed with `/alerts/ingest` + Shapely geofencing + STALE/UNKNOWN + outreach-org selection, volunteer availability per alert, matching against volunteers found by region geo query, with reservation, escalation, post-calamity referrals, closures with deterministic states, route constraints + HERE polyline post-check, card data, and Scenarios A/B/C in API-only tests and the smoke test (no Fetch/HERE/ASI:One keys). Real feed data is display-only. Missing or stale data never means safe.
+
+
+## 17. Getting a HERE API key (for the Route agent)
+
+Source: HERE docs, [How to create an App ID, API key and token credentials](https://docs.here.com/here-kb/docs/how-to-create-an-app-id-api-key-and-token-credentials-on-here-s-platform) and [Using API keys](https://docs.here.com/identity-and-access-management/docs/plat-using-apikeys).
+
+1. Sign in (or sign up) at **platform.here.com**.
+2. Open the launcher menu and choose **Access Manager**.
+3. On the **Apps** tab, click **Register new app** and give it a name (e.g. `doorstep-demo`). HERE creates an app ID.
+4. For **Default access to a project**, keep **No project**. HERE's knowledge base recommends this, and it lets the key reach all location-service APIs, including Routing v8.
+5. Open the app's **Credentials** tab → **API Keys** → **Create API key** (at most two keys per app). If the Credentials tab is missing or greyed out, you lack manager rights for that app.
+6. Copy the key and paste it into your local `.env` as `HERE_API_KEY=...`. **Never commit it, paste it in chat, or put it in a card or image URL** (the Route agent calls HERE server-side only).
+7. Optional: restrict the key. Trusted domains apply to browser use; changes can take up to 30 minutes.
+
+The Freemium/Base plan includes a free monthly allowance (check the current numbers on HERE's pricing page); a hackathon demo uses a tiny fraction of it. Tests mock HERE and need no key.
