@@ -157,3 +157,17 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
 - **Known limits:**
   - A real address outside the synthetic regions registers a resident (zone `OUTSIDE_KNOWN_ZONES`) but refuses a volunteer (`NO_REGION`).
   - No coordinator approval card yet.
+
+### Live self-registration + pushes on the right chat (2026-10-18)
+- **Live run:**
+  - In ASI:One, `UNLINK` (new demo command) → "register as resident" → form card → address geocoded with **2 HERE calls** (free tier) → confirm → linked.
+  - The coordinator triggered the Zone 3 alert; the **check-in card appeared in the resident's own chat without them typing**.
+- **Geocode guardrail seen live:**
+  - "Del Mar High School, 312 S Del Mar Ave, San Gabriel" was refused: HERE matched a POI (`NOT_PRECISE:place`).
+  - The street address alone matched at house-number level (HIGH) and lands in the synthetic WARNING sector.
+- **Bug found and fixed (`integrations/outbox.py`):**
+  - Cause: `ctx.send` stamps the envelope with the context's session, and ASI:One shows a message only in the chat whose session it carries. A push sent from the AlertNotification handler carried the Calamity agent's session, so it never showed up anywhere.
+  - Fix: the outbox now sends each person's messages through the context of their latest chat message (`Outbox.remember`, called in `handle_chat`).
+  - Test: `test_pushes_go_out_on_the_persons_chat_session`.
+- **Limit:** after an agent restart, a person must send one message before pushes reach them (the session is held in memory only).
+- **Tests:** 246 pass, 2 skipped.

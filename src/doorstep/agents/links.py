@@ -63,6 +63,14 @@ class LinkRegistry:
         if ctx is not None:
             ctx.storage.set(f"link:{link.address}", json.dumps(asdict(link)))
 
+    def remove(self, ctx: Any, address: str) -> bool:
+        """Demo control: forget this chat's link locally (B's record is unchanged)."""
+        existed = self._by_address.pop(address, None) is not None
+        if ctx is not None and ctx.storage.get(f"link:{address}"):
+            ctx.storage.remove(f"link:{address}")
+            existed = True
+        return existed
+
     def all(self) -> list[Link]:
         return list(self._by_address.values())
 

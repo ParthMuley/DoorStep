@@ -109,6 +109,7 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         sender,
         ChatAcknowledgement(timestamp=datetime.now(timezone.utc), acknowledged_msg_id=msg.msg_id),
     )
+    journey.outbox.remember(ctx, sender)  # pushes to this person go out on this chat's session
     text = extract_text(msg)
     correlation_id = new_correlation_id()
     # Never log resident free text; length is enough to debug delivery.
@@ -223,6 +224,10 @@ async def route(ctx: Context, text: str, correlation_id: str, sender: str = ""):
     code = link_code_from_text(text) or (selection.get("code") if selection.get("action") == "link" else None)
     if code:
         return await link_account(ctx, sender, str(code).strip().upper(), correlation_id)
+    if MENTION.sub("", text).strip().lower() == "unlink":  # demo control: start over in this chat
+        journey.subscribers.discard(sender)
+        removed = journey.people.remove(ctx, sender)
+        return ("This chat is no longer linked (demo). " if removed else "This chat wasn't linked. ") +             "You can LINK <code> or register again."
     link = journey.people.get(ctx, sender)
     if link is None:
         reg = await registration_route(ctx, sender, text, selection, correlation_id)

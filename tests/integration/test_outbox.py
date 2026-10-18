@@ -57,3 +57,27 @@ async def test_burst_arrives_as_one_message(monkeypatch):
     assert "Reply first." in got[0].content[0].text and "Pushed alert." in got[0].content[0].text
     assert kind(got[0]) == "detail" and "Help on the way" in got[0].content[1].metadata["card_payload"]
     assert "A later, separate update." in got[1].content[0].text and kind(got[1]) is None
+
+
+class FakeCtx:
+    def __init__(self, name, sent):
+        self.name, self.sent = name, sent
+        self.logger = __import__("logging").getLogger("test")
+
+    async def send(self, address, msg):
+        self.sent.append((self.name, address))
+
+
+async def test_pushes_go_out_on_the_persons_chat_session(monkeypatch):
+    """ASI:One shows a message only in the chat whose session it carries, so a push from an
+    alert handler must be sent through the person's own chat context."""
+    sent: list = []
+    outbox, chat_ctx, alert_ctx = Outbox(), FakeCtx("chat", sent), FakeCtx("alert", sent)
+    monkeypatch.setenv("PUSH_COALESCE_SECONDS", "0.05")
+    await outbox.add(alert_ctx, "stranger", "push")  # never chatted: falls back to the given ctx
+    outbox.remember(chat_ctx, "rosa")
+    await outbox.add(alert_ctx, "rosa", "check-in")
+    await asyncio.sleep(0.3)
+    monkeypatch.setenv("PUSH_COALESCE_SECONDS", "0")
+    await outbox.add(alert_ctx, "rosa", "legacy")
+    assert sorted(sent) == [("alert", "stranger"), ("chat", "rosa"), ("chat", "rosa")]
