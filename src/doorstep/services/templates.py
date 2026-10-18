@@ -1,8 +1,8 @@
 """Fixed resident-facing text. LLMs never generate safety wording.
 
-English text is from master spec Section 8. The Spanish text is a careful
-translation that MUST be reviewed by a fluent speaker before any demo
-(tracked in docs/decisions.md B-14; review sheet: docs/spanish-review.md). Every message starts with DOORSTEP DEMO and
+English text is from master spec Section 8. The Spanish text was reviewed and
+signed off on 2026-10-18 (docs/spanish-review.md, decision B-14). Re-check any
+wording change with that sheet. Every message starts with DOORSTEP DEMO and
 says it is a simulation.
 """
 

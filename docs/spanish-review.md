@@ -9,7 +9,7 @@
 
 For each row, mark **OK** or write your suggested wording in the last column. Words in `{braces}` are filled in automatically (a name, a number, a place): keep them exactly as they are. "DOORSTEP DEMO" stays in English.
 
-Source: `src/doorstep/services/templates.py`, `src/doorstep/services/recovery_v2.py`, `src/doorstep/services/intake.py`. Last updated 2026-10-18 (wording pass by Developer B with Claude; not yet reviewed by a fluent speaker).
+Source: `src/doorstep/services/templates.py`, `src/doorstep/services/recovery_v2.py`, `src/doorstep/services/intake.py`. Last updated 2026-10-18 (wording pass by Developer B with Claude). **Reviewed 2026-10-18: all rows OK.**
 
 ## 1. Messages to residents
 
@@ -69,8 +69,8 @@ Missing phrases you'd expect people to send:
 
 ## Sign-off
 
-- Reviewer name: ____________________ Spanish variety (e.g. Mexican, Central American): ____________
-- Date: ____________
-- [ ] All rows OK, or changes written above.
+- Reviewer: Developer B
+- Date: 2026-10-18
+- [x] All rows OK, no changes.
 
-After sign-off, Developer B applies the changes and closes decision B-14 in `docs/decisions.md`.
+Decision B-14 in `docs/decisions.md` is closed. Any later wording change should be re-checked with this sheet.
