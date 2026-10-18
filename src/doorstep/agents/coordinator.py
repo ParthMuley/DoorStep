@@ -68,7 +68,7 @@ def _require_env(name: str) -> str:
 PORT = int(os.getenv("COORDINATOR_PORT", "8101"))
 
 agent = Agent(
-    name="doorstep_coordinator",
+    name="Doorstep",  # display name in ASI:One; handle @doorstep is set on the Agentverse profile
     seed=_require_env("COORDINATOR_SEED"),
     port=PORT,
     mailbox=True,

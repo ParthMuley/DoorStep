@@ -259,3 +259,8 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
 - **Fixed:**
   - When the volunteer is simulated (not on ASI:One), a linked resident now gets the trip card on approval too (before, they had to ask `status`).
   - Consent button shortened to "Yes, request help" (the long label was cut off).
+
+### Agent name + handle (mentor suggestion, 2026-10-18)
+- Display name `doorstep_coordinator` → **Doorstep** (code). Same seed, so the same address and chat history.
+- Handle **`@doorstep`**, set by Parth on the Agentverse profile page; Agentverse has no handle API.
+- Agentverse's search API confirms `handle: doorstep`. ASI:One's `@` mention suggestions didn't list it yet right after the change (separate index, refreshes later). Until then, mention the agent by address or open an existing chat.
