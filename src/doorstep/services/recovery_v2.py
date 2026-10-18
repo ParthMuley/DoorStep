@@ -43,7 +43,7 @@ HELP_LABELS = {
     "INSURANCE_GUIDANCE": {"en": "insurance guidance", "es": "orientación sobre seguros"},
     "SUPPLIES": {"en": "supplies", "es": "suministros"},
     "MEDICAL_EQUIPMENT_REPLACEMENT": {"en": "medical equipment replacement", "es": "reemplazo de equipo médico"},
-    "CASEWORK": {"en": "casework", "es": "gestión de caso"},
+    "CASEWORK": {"en": "casework", "es": "manejo de casos"},
 }
 
 

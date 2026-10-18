@@ -117,7 +117,7 @@ Agents: see `docs/dev-a-notes.md` (agent seeds, Agentverse mailboxes, `scripts/r
 - **Roads.** Only official closures block roads; news reports are cautions. "No report" never means open. Routes are labeled *illustrative only, not for live evacuation*.
 - **Consent.** Purpose-specific (check-in, transport, destination, recovery). Each organization receives only the fields it needs.
 - **Known gaps:**
-  - The Spanish message templates still need review by a fluent speaker.
+  - The Spanish message templates were reviewed and signed off on 2026-10-18 (`docs/spanish-review.md`).
   - Token auth is demo gating, not production security.
   - The seeded ASI:One link codes (`MARIA-4821`, …) are public because they're in the repo. That's fine for synthetic people only.
   - The road map and polygons are fictional.

@@ -1,8 +1,8 @@
 """Fixed resident-facing text. LLMs never generate safety wording.
 
-English text is from master spec Section 8. The Spanish text is a careful
-translation that MUST be reviewed by a fluent speaker before any demo
-(tracked in docs/decisions.md). Every message starts with DOORSTEP DEMO and
+English text is from master spec Section 8. The Spanish text was reviewed and
+signed off on 2026-10-18 (docs/spanish-review.md, decision B-14). Re-check any
+wording change with that sheet. Every message starts with DOORSTEP DEMO and
 says it is a simulation.
 """
 
@@ -13,40 +13,40 @@ TEMPLATES: dict[str, dict[str, str]] = {
         "en": ("DOORSTEP DEMO: A simulated warning affects your test area. Do you need "
                "transportation planning help? Reply 1 NEED HELP, 2 HAVE A PLAN, 3 ALREADY LEFT, "
                "4 CALL ME. This is a simulation, not an emergency alert."),
-        "es": ("DOORSTEP DEMO: Una advertencia simulada afecta su área de prueba. ¿Necesita ayuda "
+        "es": ("DOORSTEP DEMO: Un aviso simulado afecta su zona de prueba. ¿Necesita ayuda "
                "para planear su transporte? Responda 1 NECESITO AYUDA, 2 TENGO UN PLAN, 3 YA SALÍ, "
                "4 LLÁMENME. Esto es una simulación, no una alerta de emergencia."),
     },
     "confirm_needs": {
         "en": ("DOORSTEP DEMO: To confirm, you need: {summary}. Reply YES if correct or NO if not. "
                "This is a simulation."),
-        "es": ("DOORSTEP DEMO: Para confirmar, usted necesita: {summary}. Responda SÍ si es correcto "
+        "es": ("DOORSTEP DEMO: Queremos confirmar que usted necesita: {summary}. Responda SÍ si es correcto "
                "o NO si no lo es. Esto es una simulación."),
     },
     "needs_confirmed": {
         "en": ("DOORSTEP DEMO: Thank you. We are checking which partner services are available. "
                "No ride is confirmed yet. This is a simulation."),
-        "es": ("DOORSTEP DEMO: Gracias. Estamos verificando qué servicios asociados están disponibles. "
+        "es": ("DOORSTEP DEMO: Gracias. Estamos verificando qué organizaciones colaboradoras pueden ayudar. "
                "Todavía no hay transporte confirmado. Esto es una simulación."),
     },
     "provider_accepted": {
         "en": ("DOORSTEP DEMO: A simulated partner provider ({provider}) has accepted your transport "
                "request. Pickup has not happened yet. This is a simulation."),
-        "es": ("DOORSTEP DEMO: Un proveedor asociado simulado ({provider}) aceptó su solicitud de "
-               "transporte. La recogida todavía no ha ocurrido. Esto es una simulación."),
+        "es": ("DOORSTEP DEMO: Una organización colaboradora simulada ({provider}) aceptó su solicitud de "
+               "transporte. Todavía no se ha realizado la recogida. Esto es una simulación."),
     },
     "arrival_confirmed": {
         "en": ("DOORSTEP DEMO: Your simulated arrival at {destination} is recorded. Would you like us to "
                "share your accessibility needs with a recovery support organization to request help "
                "finding temporary accommodation? This is a simulation."),
         "es": ("DOORSTEP DEMO: Su llegada simulada a {destination} quedó registrada. ¿Desea que "
-               "compartamos sus necesidades de accesibilidad con una organización de apoyo para "
-               "solicitar ayuda con alojamiento temporal? Esto es una simulación."),
+               "compartamos sus necesidades de accesibilidad con una organización de apoyo para la "
+               "recuperación, para solicitar ayuda con alojamiento temporal? Esto es una simulación."),
     },
     "help_on_the_way": {
         "en": ("DOORSTEP DEMO: A volunteer has accepted and is on the way (simulated). Estimated arrival about "
                "{eta} minutes. This is an estimate, not a guarantee. This is a simulation."),
-        "es": ("DOORSTEP DEMO: Un voluntario aceptó y va en camino (simulado). Llegada estimada en unos {eta} "
+        "es": ("DOORSTEP DEMO: Una persona voluntaria aceptó y va en camino (simulado). Llegada estimada: unos {eta} "
                "minutos. Es una estimación, no una garantía. Esto es una simulación."),
     },
     "recovery_requested": {
@@ -74,8 +74,8 @@ TEMPLATES: dict[str, dict[str, str]] = {
     "coordinator_followup": {
         "en": ("DOORSTEP DEMO: Assistance is NOT confirmed yet. Your request was passed to a coordinator "
                "for follow-up. For emergencies call 911. This is a simulation."),
-        "es": ("DOORSTEP DEMO: La asistencia todavía NO está confirmada. Su solicitud pasó a un "
-               "coordinador para seguimiento. En emergencias llame al 911. Esto es una simulación."),
+        "es": ("DOORSTEP DEMO: La asistencia todavía NO está confirmada. Su solicitud se envió a un "
+               "coordinador para darle seguimiento. En caso de emergencia, llame al 911. Esto es una simulación."),
     },
 }
 
