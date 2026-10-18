@@ -16,5 +16,5 @@ from doorstep.services.db import Database
 from doorstep.services.engine import DoorstepService
 print(DoorstepService(Database()).reset())
 PY
-  echo "Reseeded $MONGODB_URI ($MONGODB_USERS_DB + $MONGODB_ORGS_DB)"
+  echo "Reseeded $MONGODB_URI ($MONGODB_USERS_DB + $MONGODB_PARTNERS_DB)"
 fi

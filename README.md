@@ -80,6 +80,7 @@ export MONGODB_URI=mongodb://127.0.0.1:27017
 scripts/run_backend.sh          # http://127.0.0.1:8000, auto-seeds the synthetic demo
 scripts/reset_demo.sh           # deterministic reset
 scripts/smoke_test.sh           # temp backend + Scenarios A (Maria), B (David), C (stale feed) over HTTP, no keys needed
+scripts/check_integration.sh    # ONE command: backend tests + A's agent tests + A's tests on B's real routes + smoke (--quick ~20 s)
 PYTHONPATH=src python -m pytest tests/unit -q                                    # backend unit tests (offline)
 DOORSTEP_TEST_MONGODB_URI=mongodb://127.0.0.1:27017 PYTHONPATH=src python -m pytest tests/unit/test_real_mongo.py
 ```

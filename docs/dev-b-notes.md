@@ -67,6 +67,15 @@ Responses carry `schema_version: "2.0"`.
 - **Deploy:** `render.yaml` + `docs/deploy-render.md`.
 - **Tests:** `tests/unit/test_links_deadlines_maps.py`; A's rev 4/5/roster tests also pass against the real routes with the stand-ins off.
 
+**Integration check (either developer, after any change):** `scripts/check_integration.sh` (or `--quick`).
+- Stage 1: backend unit tests.
+- Stage 2: A's agent tests as written.
+- Stage 3: A's linking, registration and roster tests with A's stand-ins switched off (`scripts/checks/no_standins.py`), i.e. on B's real routes.
+- Stage 4: the smoke test.
+- Stage 5: real MongoDB, if `DOORSTEP_TEST_MONGODB_URI` is set.
+- Needs Python 3.11/3.12 with `pip install -e ".[dev]"` (or `CHECK_PY=`). Forces offline mode (mongomock, no ASI:One calls).
+- Its first run caught `_env.sh` exporting the old `MONGODB_ORGS_DB=doorstep_orgs`. It's now `MONGODB_PARTNERS_DB=doorstep_partners`. A local Mongo seeded before this fix needs `scripts/reset_demo.sh` once.
+
 **v1 routes:** still mounted for A's old test (`tests/integration/test_fetch_backend_client.py`) and `workflows/backend_client.py`. A's agents no longer call any v1-only endpoint (they use `GET /cases/{id}` and the v2 routes). Remove them in one PR together with A's v1 client and test (plan §6.2).
 
 **Removed (v2.0):** `/organizations/{id}/volunteers`, `/orgs/{id}/volunteers`, `/orgs/{id}/volunteers/{vid}/availability`, `/orgs/{id}/outreach`, `X-Org-Agent`. A's stand-ins for these should switch to the v2.1 routes above.
