@@ -236,3 +236,12 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   - `POST /routes/candidates` (stand-in in `fake_v2_backend.py`);
   - fix the unit-test `.env` leak (`create_app()` → `load_dotenv()` after `hermetic_env`).
 - 58/58 integration tests pass on B's real routes. B's unit tests pass when the placeholders are preset.
+
+### Live on Render (2026-10-18)
+- **Setup:** all 8 agents point at B's Render backend (`DOORSTEP_API_URL`); 8/8 mailboxes, all registered. Roster imported on Render; Alex linked in ASI:One with an invite code through B's real `/link`. `UNLINK` now also calls B's `/unlink`.
+- **Journey:** alert → Alex's availability (sent with his linked-address sender; B accepted) → match: Alex #1 → approve → Alex accepts in ASI:One.
+  - **The route map appeared in Alex's trip card**, served from Render `/maps/<unguessable id>.png` (640x400). It showed the route, the ORDER zone, the Ridge Ave closure and the stops.
+  - Then two-party pickup → arrival → GREEN.
+- **Drive time:** fell back to distance ranking because Render has no `POST /routes/candidates` yet (`NOT_FOUND`). Works locally against the stand-in. **Needs B (§000.11).**
+- **Fix:** B expires a map when the assignment ends, so the trip card drops the image once the trip has arrived. Earlier cards in the chat will lose their image after the browser cache (1 h); that's expected.
+- **`.env` note:** `DEMO_AUTH_TOKEN` appears twice (the old default plus Render's; dotenv uses the later one). The Render lines use `KEY = value`; dotenv accepts that, but shell scripts that source `.env` won't.

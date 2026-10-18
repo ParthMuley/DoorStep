@@ -231,6 +231,14 @@ async def route(ctx: Context, text: str, correlation_id: str, sender: str = ""):
     if plain == "unlink":  # demo control: start over in this chat
         journey.subscribers.discard(sender)
         removed = journey.people.remove(ctx, sender)
+        try:  # B v2.2: release the address at B too (404 = B had no link for it)
+            await get_v2_backend().unlink(sender, correlation_id)
+            removed = True
+        except BackendError as err:
+            if err.status_code != 404:
+                ctx.logger.warning(f"[{correlation_id}] unlink at backend failed: {err.code}")
+        except OSError:
+            ctx.logger.warning(f"[{correlation_id}] unlink at backend: backend unreachable")
         return ("This chat is no longer linked (demo). " if removed else "This chat wasn't linked. ") + (
             "You can LINK followed by your code, or register again.")
     link = journey.people.get(ctx, sender)

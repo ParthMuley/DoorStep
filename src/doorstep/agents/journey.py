@@ -569,7 +569,8 @@ class Journey:
                         "Confirm only once you are in the volunteer's vehicle."), pickup
         else:
             nxt, cta = "A coordinator is arranging help; nothing is confirmed yet.", None
-        image = getattr(j.route, "map_url", None) if mine else None  # pickup point: volunteer only
+        # Pickup point: volunteer only. B expires the map when the assignment ends, so drop it on arrival.
+        image = getattr(j.route, "map_url", None) if mine and not arrived else None
         if image and not image.startswith("https://"):
             rows.append(("Map", "rendered; shown once the backend has a public https address"))
         return trip_card(case_id=case_id, name=NAMES.get(case_id, case_id), progress=progress, rows=rows,

@@ -211,6 +211,12 @@ class DoorstepBackendV2(DoorstepBackend):
                                    self._v2(correlation_id, code=code, asi_one_address=asi_one_address),
                                    extra_headers={"X-Agent-Token": doorstep_agent_token()})
 
+    async def unlink(self, asi_one_address: str, correlation_id: str) -> dict[str, Any]:
+        """`POST /unlink` (v2.2): release a linked address (the code stays spent; /demo/reset reissues)."""
+        return await self._request("POST", "/unlink", correlation_id, self._v2(correlation_id,
+                                   asi_one_address=asi_one_address),
+                                   extra_headers={"X-Agent-Token": doorstep_agent_token()})
+
     async def register(self, role: str, asi_one_address: str, profile: dict[str, Any], org_id: str | None,
                        correlation_id: str) -> dict[str, Any]:
         """`POST /register` (plan rev 5): create the person and link the envelope sender."""
