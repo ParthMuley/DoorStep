@@ -109,7 +109,8 @@ Base URL `DOORSTEP_API_URL` (default `http://127.0.0.1:8000`). Responses below o
 
 ### 5.1 Health and demo
 - **`GET /health`** → `{"status":"ok","version":"2.0.0","simulation_mode":true,"databases":{"users":"ok","orgs":"ok"},"alerts":{"last_ingest_at":"…","feed_freshness":"FRESH"},"closures":{"last_ingest_at":"…"}}`
-- **`POST /demo/reset`** (token): reseed §10 into both databases. → `{"status":"reset","residents":2,"organizations":7,"volunteers":6,"simulated":true}`
+- **`POST /demo/reset`** (token): reseed §10 into both databases. → `{"status":"reset","dataset":"core","residents":2,"organizations":7,"volunteers":7,"link_codes":5,"simulated":true}`
+  - Optional body `{"dataset": "core" | "full"}`; default `DEMO_DATASET`, else `core`. **core** is what every test asserts against. **full** adds 8 residents, 8 volunteers, 4 orgs, 2 shelters and a flood use case for the live demo (`docs/demo-cast.md`). Additive: no field changes, core stories identical.
 
 ### 5.2 Registration (before a calamity)
 
@@ -225,7 +226,7 @@ B's rules:
 - **`outreach_orgs`** (plan decision 6):
   1. Geo query from the zone polygon to `regions`, nearest first.
   2. In those regions, keep approved orgs offering `TRANSPORT` whose `calamity_types` include the alert's type (or `ANY`), where the region is within the org's `service_radius_km` of the zone.
-  3. Take the closest `OUTREACH_MAX_ORGS` orgs (default 3). `region_ids` lists only that org's regions within its radius: its far-away regions (e.g. SF for an LA fire) are never contacted.
+  3. Take the closest `OUTREACH_MAX_ORGS` orgs (default 3; 6 when the full demo dataset is loaded). `region_ids` lists only that org's regions within its radius: its far-away regions (e.g. SF for an LA fire) are never contacted.
 
   Returned only for simulated alerts with affected residents. The Doorstep agent sends one `OutreachRequest` for the alert to the **Volunteer Network agent** (`network_agent_address`).
 
@@ -245,7 +246,7 @@ Live alerts show `verification: OFFICIAL_LIVE_DISPLAY_ONLY`, `can_trigger_checki
 **`POST /demo/alerts/trigger`** (token): changes the synthetic feed. The Calamity agent's next poll picks it up (`poll_now:true` ingests immediately).
 `{"action":"ISSUE","preset":"ZONE_3_WILDFIRE","poll_now":false}`
 - `action`: `ISSUE | UPDATE | CANCEL | EXPIRE | FREEZE_FEED | UNFREEZE_FEED`.
-- `preset`: `ZONE_3_WILDFIRE` (WARNING over Maria + ORDER over David + an awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER`. Or explicit `zone_id`, `status` (raw Cal OES string), `event_type`, `geometry`, `expires_in_minutes`.
+- `preset`: `ZONE_3_WILDFIRE` (WARNING over Maria + ORDER over David + an awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER`, `SOUTH_VALLEY_FLOOD` (FLOOD warning over Omar + Dolores; people only in the full dataset). Or explicit `zone_id`, `status` (raw Cal OES string), `event_type`, `geometry`, `expires_in_minutes`.
 - `FREEZE_FEED` stops `STATEWIDE_LAST_UPDATED` advancing, so the feed goes STALE (Scenario C).
 - `CANCEL` = explicit lift: the record stays in the feed with `STATUS: "Normal"`, so it's canceled on the next ingest. `EXPIRE` = the record disappears from the feed, so it's canceled only after 2 consecutive ingests without it.
 - `FREEZE_FEED` accepts optional `freeze_age_minutes` to backdate the frozen timestamp, so the demo goes STALE immediately. `UNFREEZE_FEED` resumes.
@@ -707,7 +708,7 @@ Atomic patterns (single region document):
 | South Valley | `red_cross_demo` → `volunteer_lee` (wheelchair van `[1,2,4,5]`, eligible alternate if Sarah declines) · `recovery_housing_demo` (presence; `TEMPORARY_HOUSING`) |
 | Westside | `red_cross_demo` → site `rc_shelter_1` (features `[4,5,6]`, 30 beds) |
 | SF Mission | `red_cross_demo` → `volunteer_sam` (wheelchair van `[1,2,4]`), present to prove a far region is never contacted |
-| Alert presets | `ZONE_3_WILDFIRE` (WARNING over Maria, ORDER over David, awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER` |
+| Alert presets | `ZONE_3_WILDFIRE` (WARNING over Maria, ORDER over David, awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER`, `SOUTH_VALLEY_FLOOD` (full dataset) |
 | Closures | synthetic feeds at reset: official `Ridge Ave` CLOSED (6 h), news report about `Canyon Rd`. Nothing is ingested until the News agent posts them. Fictional roads: `seg_ridge_ave`, `seg_canyon_rd`, `seg_valley_blvd`, `seg_civic_way` (`src/doorstep/demo/roads.py`) |
 
 Coordinates and polygons are fictional, defined in `src/doorstep/demo/seed.py`. Tests include a resident point exactly on a polygon edge.

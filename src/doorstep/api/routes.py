@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, Response
 
 from doorstep.models import SCHEMA_VERSION
 from doorstep.services.engine import DoorstepService
+from doorstep.services.errors import Conflict
 
 from . import schemas as s
 from .security import correlation_header, is_agent, require_agent, require_agent_token, require_demo_token
@@ -137,8 +138,11 @@ def sim_messages(case_id: Optional[str] = None, service: DoorstepService = Depen
 
 # ----------------------------------------------------------------- writes
 @write.post("/demo/reset")
-def demo_reset(service: DoorstepService = Depends(svc)):
-    return out(service.reset())
+def demo_reset(body: Optional[s.ResetBody] = None, service: DoorstepService = Depends(svc)):
+    try:
+        return out(service.reset(body.dataset if body else None))
+    except ValueError as exc:  # bad DEMO_DATASET value on the server
+        raise Conflict(str(exc), code="VALIDATION_ERROR") from exc
 
 
 @write.post("/demo/warnings")

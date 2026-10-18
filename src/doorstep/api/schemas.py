@@ -315,3 +315,7 @@ class ApproveBody(Body):
 
 class SweepBody(Body):
     pass
+
+
+class ResetBody(Body):
+    dataset: Optional[Literal["core", "full"]] = None  # default DEMO_DATASET, else core (decision B-45)

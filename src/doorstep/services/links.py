@@ -39,8 +39,8 @@ class LinkService:
         self.events = engine.events
 
     # ------------------------------------------------------------- seeding
-    def seed_codes(self) -> None:
-        for code, entry in seed.LINK_CODES.items():
+    def seed_codes(self, dataset: str = "core") -> None:
+        for code, entry in seed.link_codes(dataset).items():
             self.db.coll("link_codes").update_one(
                 {"_id": code}, {"$set": {**entry, "code": code, "source": "SEED", "spent_by": None}}, upsert=True)
 

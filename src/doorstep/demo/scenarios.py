@@ -387,20 +387,20 @@ def main(argv: list[str] | None = None) -> int:
         try:
             if args.flow in ("v1", "both"):
                 if not args.no_reset:
-                    _ok(client.post("/demo/reset"))
+                    _ok(client.post("/demo/reset", json={"dataset": "core"}))
                 if args.scenario in ("a", "both"):
                     run_scenario_a(client)
                 if args.scenario in ("b", "both"):
                     run_scenario_b(client)
             if args.flow in ("v2", "both"):
-                _ok(client.post("/demo/reset"))
+                _ok(client.post("/demo/reset", json={"dataset": "core"}))
                 if args.scenario in ("a", "both"):
                     run_scenario_a_v2(client)
                 if args.scenario in ("b", "both"):
                     if args.scenario == "b":
                         start_alert_v2(client)
                     run_scenario_b_v2(client)
-                _ok(client.post("/demo/reset"))
+                _ok(client.post("/demo/reset", json={"dataset": "core"}))
                 run_scenario_c_v2(client)
         except ScenarioFailure as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
