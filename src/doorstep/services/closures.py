@@ -37,6 +37,7 @@ FEED_DOC = "synthetic_closures"
 BLOCKING_CLAIMS = (ClaimedStatus.CLOSED.value, ClaimedStatus.RESTRICTED.value)
 SEGMENT_BUFFER_DEG = 0.0003  # ~30 m either side of the fictional road line
 NOTE = "No report does not mean a road is open."
+STATUS_ALIASES = {"UNCLEAR": "UNKNOWN"}  # the News agent's extractor says UNCLEAR
 
 
 def _now() -> datetime:
@@ -195,8 +196,10 @@ class ClosureService:
                 if not road_name:
                     rejected.append({"source_item_id": item_id, "reason": "MISSING_ROAD"})
                     continue
+                raw_status = (cand.get("claimed_status") or "UNKNOWN").strip().upper()
+                raw_status = STATUS_ALIASES.get(raw_status, raw_status)
                 try:
-                    claimed = ClaimedStatus((cand.get("claimed_status") or "UNKNOWN").upper()).value
+                    claimed = ClaimedStatus(raw_status).value
                 except ValueError:
                     rejected.append({"source_item_id": item_id, "reason": f"UNKNOWN_STATUS:{cand.get('claimed_status')}"})
                     continue
@@ -224,7 +227,8 @@ class ClosureService:
                 changed = changed or updated.state != before
                 if updated.state == ClosureState.OFFICIAL_CONFIRMED.value and before != updated.state:
                     new_official.append(updated.closure_id)
-                accepted.append({"closure_id": updated.closure_id, "state": updated.state,
+                accepted.append({"closure_id": updated.closure_id, "road_name": updated.road_name,
+                                 "claimed_status": claimed, "state": updated.state,
                                  "segment_id": updated.segment_id, "display_only": display_only})
             self.events.append("CLOSURES_INGESTED", case_id=None, correlation_id=correlation_id,
                                data={"source_id": source_id, "source_type": source_type, "accepted": len(accepted),

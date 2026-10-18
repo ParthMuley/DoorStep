@@ -467,6 +467,10 @@ B matches approved orgs whose `recovery_services` include each help type, neares
    "candidate":{"road_name":"Canyon Rd","claimed_status":"CLOSED","location_text":"near Zone 3"}}],
  "idempotency_key":"SYNTHETIC_NEWS:news_001"}
 ```
+  - `extraction_method`: `STRUCTURED_FEED` | `ASI_ONE_EXTRACTION` | `KEYWORD_EXTRACTION` (the agent's offline fallback). It's only a label, and it never changes the state.
+  - `claimed_status`: `CLOSED` | `OPEN` | `RESTRICTED` | `UNKNOWN` (`UNCLEAR` is accepted as `UNKNOWN`). An unknown value lands in `rejected` with `UNKNOWN_STATUS:<value>`, and the rest of the batch is still processed.
+  - Response: `{"accepted":[{"closure_id","road_name","claimed_status","state","segment_id","display_only"}],"rejected":[{"source_item_id","reason"}],"new_official_closures","notify_coordinator"}`.
+
   **B sets `state`; the agent never does:**
   - `OFFICIAL_SIMULATION` + CLOSED → `OFFICIAL_CONFIRMED`; `NEWS` / `REAL_WORLD_CONTEXT` → `UNVERIFIED_REPORT`;
   - contradictory active claims about one segment → `CONFLICTING`; expired or lifted → `EXPIRED`;

@@ -45,7 +45,7 @@ class ClosureClaim(DoorstepModel):
     url: Optional[str] = None
     headline: str = ""
     raw_text: str = ""
-    extraction_method: str = "STRUCTURED_FEED"  # or ASI_ONE_EXTRACTION
+    extraction_method: str = "STRUCTURED_FEED"  # or ASI_ONE_EXTRACTION / KEYWORD_EXTRACTION (label only, never trust)
     received_at: Optional[str] = None
 
 

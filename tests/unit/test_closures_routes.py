@@ -198,3 +198,23 @@ def test_preview_on_refused_request_is_rejected(svc):
     req_id = svc.db.coll("route_requests").find_one({})["route_request_id"]
     with pytest.raises(Conflict):
         preview(svc, req_id, ROUTE_AVOIDING_RIDGE)
+
+
+def test_news_agent_payload_shape_is_accepted_over_http(client):
+    """Exactly what A's News agent sends: keyword fallback label and UNCLEAR status."""
+    news = client.get("/demo/feeds/news").json()["items"][0]
+    body = {"schema_version": "2.0", "idempotency_key": "news:k1",
+            "source": {"source_id": "SYNTHETIC_NEWS", "source_type": "NEWS", "url": "/demo/feeds/news"},
+            "items": [{"source_item_id": news["item_id"], "headline": news["headline"], "raw_text": news["body"],
+                       "extraction_method": "KEYWORD_EXTRACTION",
+                       "candidate": {"road_name": "Canyon Rd", "claimed_status": "CLOSED", "location_text": ""}},
+                      {"source_item_id": "news_x", "extraction_method": "ASI_ONE_EXTRACTION",
+                       "candidate": {"road_name": "Valley Blvd", "claimed_status": "UNCLEAR", "location_text": ""}}]}
+    r = client.post("/closures/ingest", json=body)
+    assert r.status_code == 200, r.text
+    acc = {a["road_name"]: a for a in r.json()["accepted"]}
+    assert acc["Canyon Rd"]["state"] == "UNVERIFIED_REPORT" and acc["Canyon Rd"]["claimed_status"] == "CLOSED"
+    assert acc["Valley Blvd"]["claimed_status"] == "UNKNOWN" and acc["Valley Blvd"]["state"] != "OFFICIAL_CONFIRMED"
+    assert r.json()["rejected"] == []
+    listed = {c["road_name"]: c for c in client.get("/closures").json()["closures"]}
+    assert listed["Canyon Rd"]["state"] == "UNVERIFIED_REPORT"  # a news report never blocks a route
