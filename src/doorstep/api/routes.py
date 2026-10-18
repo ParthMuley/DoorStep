@@ -37,8 +37,8 @@ def pick(header: Optional[str], body: Optional[s.Body]) -> Optional[str]:
 
 # ------------------------------------------------------------------ reads
 @router.get("/health")
-def health():
-    return out({"status": "ok", "simulation_mode": True})
+def health(service: DoorstepService = Depends(svc)):
+    return out({"status": "ok", "simulation_mode": True, "databases": service.db.ping()})
 
 
 @router.get("/cases")

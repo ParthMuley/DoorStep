@@ -42,10 +42,15 @@ COMMUNICATION_TRANSITIONS: dict[str, set[str]] = {
 }
 
 
+def _v(status) -> str:
+    """Plain status string (str-Enums format as ``Cls.MEMBER`` in f-strings on 3.12+)."""
+    return getattr(status, "value", status)
+
+
 def check_resident_transition(current: str, target: str, assignment: Optional[Assignment] = None) -> None:
     """Raise InvalidTransition unless ``current -> target`` is allowed *and* backed by evidence."""
     if target not in RESIDENT_TRANSITIONS.get(current, set()):
-        raise InvalidTransition(f"Resident status {current} -> {target} is not allowed")
+        raise InvalidTransition(f"Resident status {_v(current)} -> {_v(target)} is not allowed")
 
     if target == R.PROVIDER_ACCEPTED:
         if assignment is None or assignment.service_type != ServiceType.ACCESSIBLE_TRANSPORT:
@@ -67,7 +72,7 @@ def check_resident_transition(current: str, target: str, assignment: Optional[As
 
 def check_communication_transition(current: str, target: str) -> None:
     if target not in COMMUNICATION_TRANSITIONS.get(current, set()):
-        raise InvalidTransition(f"Communication status {current} -> {target} is not allowed")
+        raise InvalidTransition(f"Communication status {_v(current)} -> {_v(target)} is not allowed")
 
 
 ACTIVE_ASSIGNMENT_STATES = {ServiceStatus.PROPOSED, ServiceStatus.AWAITING_PROVIDER, ServiceStatus.ACCEPTED}

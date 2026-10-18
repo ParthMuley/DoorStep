@@ -4,7 +4,7 @@
 set -euo pipefail
 source "$(dirname "$0")/_env.sh"
 TMP="$(mktemp -d)"
-export DOORSTEP_DB_PATH="$TMP/smoke.db"
+export USE_MONGOMOCK=true  # offline: in-memory MongoDB (mongomock)
 PORT="${SMOKE_PORT:-$("$PY" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1])')}"
 API="http://127.0.0.1:$PORT"
 

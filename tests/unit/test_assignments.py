@@ -99,3 +99,24 @@ def test_offer_ids_are_scoped_per_case(svc):
     svc.evaluate_transport("case_david_002", t_offers(), "req_101")
     assert svc.store.get_offer(MARIA, "offer_t_001").eligible is True
     assert svc.store.get_offer("case_david_002", "offer_t_001").eligible is False
+
+
+def test_database_unique_index_blocks_second_accepted_assignment(svc):
+    """Even if every engine guard were bypassed (a race), MongoDB's partial unique
+    index refuses a second ACCEPTED assignment for the same case + service type."""
+    from pymongo.errors import DuplicateKeyError
+
+    maria_evaluated(svc)
+    a, _ = svc.propose_assignment(MARIA, transport_offer_id="offer_t_001", idempotency_key="ka")
+    e, _ = svc.propose_assignment(MARIA, transport_offer_id="offer_t_005", idempotency_key="ke")
+    first = svc.store.get_assignment(a["assignment_id"])
+    second = svc.store.get_assignment(e["assignment_id"])
+    first.status = second.status = "ACCEPTED"
+    svc.store.save_assignment(first)
+    with pytest.raises(DuplicateKeyError):
+        svc.store.save_assignment(second)
+    # Releasing the first (e.g. provider canceled) frees the slot again.
+    first.status = "CANCELED"
+    svc.store.save_assignment(first)
+    svc.store.save_assignment(second)
+    assert svc.store.accepted_assignment(MARIA, "accessible_transport").assignment_id == e["assignment_id"]

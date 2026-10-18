@@ -1,15 +1,17 @@
 """DoorstepService: authoritative implementation of docs/interface-contract.md v1.0
 (Developer B side). The FastAPI app is a thin layer over this class.
 
-Every state change happens inside one SQLite transaction together with the
-timeline event that explains it, so displayed status == persisted evidence.
+Every state change is written together with the timeline event that explains
+it (serialized by ``db.tx()``). MongoDB has no multi-collection rollback here, so
+each operation checks all of its guards *before* its first write.
 Methods return contract-shaped dicts (the API adds ``schema_version``).
 """
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any, Optional
+
+from pymongo.errors import DuplicateKeyError
 
 from doorstep.demo import seed
 from doorstep.demo.synthetic_zone_graph import ZoneGraph, build_demo_graph
@@ -595,7 +597,7 @@ class DoorstepService:
                     else:
                         self._decline(row, case, corr)
                     self._save_case(case)
-            except sqlite3.IntegrityError as exc:
+            except DuplicateKeyError as exc:
                 raise Conflict("Another assignment for this service was already accepted",
                                code="DUPLICATE_ACCEPTANCE") from exc
 
@@ -743,6 +745,8 @@ class DoorstepService:
                                     reasons=["NOT_ACCEPTED"])
         resident = self.store.get_resident(case.resident_id)
         ids_verified = verification.check_pickup_evidence(evidence, resident, a)
+        check_resident_transition(case.resident_status, R.PICKUP_CONFIRMED,
+                                  a.model_copy(update={"confirmed_pickup_at": "pending"}))
         with self.db.tx():
             a.confirmed_pickup_at = utc_now_iso()
             a.updated_at = a.confirmed_pickup_at
@@ -775,6 +779,8 @@ class DoorstepService:
                                     reasons=["NO_AGREED_DESTINATION"])
         resident = self.store.get_resident(case.resident_id)
         ids_verified = verification.check_arrival_evidence(evidence, resident, a, destination)
+        check_resident_transition(case.resident_status, R.ARRIVAL_CONFIRMED,
+                                  a.model_copy(update={"confirmed_arrival_at": "pending"}))
         with self.db.tx():
             a.confirmed_arrival_at = utc_now_iso()
             a.status = S.COMPLETED

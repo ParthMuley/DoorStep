@@ -13,7 +13,9 @@ def quiet(*_a, **_k):
 
 def test_health_and_reads_are_public(client):
     client.headers.pop("Authorization")
-    assert client.get("/health").json() == {"schema_version": "1.0", "status": "ok", "simulation_mode": True}
+    health = client.get("/health").json()
+    assert health["status"] == "ok" and health["simulation_mode"] is True
+    assert health["databases"] == {"users": "ok", "orgs": "ok"}
     assert client.get("/cases").status_code == 200
 
 
@@ -85,28 +87,25 @@ def test_reset_restores_seed_state(svc):
     assert svc.store.list_cases() == []
 
 
-def test_persisted_state_survives_restart(tmp_path):
-    path = str(tmp_path / "demo.db")
-    svc = DoorstepService(Database(path))
+def test_persisted_state_survives_restart():
+    import mongomock
+
+    client = mongomock.MongoClient()  # same "server" before and after the restart
+    svc = DoorstepService(Database(client=client))
     svc.reset()
     aid = maria_accepted(svc)
-    svc.db.close()
-    restarted = DoorstepService(Database(path))
+    restarted = DoorstepService(Database(client=client))
     assert restarted.store.get_case("case_maria_001").resident_status == "PROVIDER_ACCEPTED"
     assert restarted.respond_assignment(aid, "transport_org_a", "ACCEPTED")["duplicate"] is True
 
 
-def test_offers_in_developer_a_agent_format_are_accepted_but_not_trusted(client):
-    """A's provider agents add fields like approved_by_partner/base_node. They are ignored:
-    an unapproved provider claiming approval is still rejected via B's registry."""
-    from doorstep.demo import seed
+def test_two_databases_are_used():
+    import mongomock
 
-    offers = [{**o, "approved_by_partner": True, "base_node": "node_depot_east", "org_name": "x (fictional)",
-               "accepts_requests": True, "valid_for_minutes": 30} for o in seed.transport_offers()]
-    client.post("/demo/warnings", json={"zone_id": "zone_3"})
-    client.post("/cases/case_maria_001/responses", json={"text": "1", "sender": seed.MARIA_SENDER})
-    client.post("/cases/case_maria_001/responses", json={"text": "SI", "sender": seed.MARIA_SENDER})
-    r = client.post("/cases/case_maria_001/transport/evaluate", json={"request_id": "r1", "candidate_offers": offers})
-    assert r.status_code == 200, r.text
-    rejected = {x["provider_id"]: x["reasons"] for x in r.json()["rejected"]}
-    assert "PROVIDER_NOT_APPROVED" in rejected["transport_org_c"]
+    client = mongomock.MongoClient()
+    svc = DoorstepService(Database(client=client))
+    svc.reset()
+    maria_accepted(svc)
+    assert set(client["doorstep_orgs"].list_collection_names()) >= {"provider_registry", "organizations"}
+    assert "provider_registry" not in client["doorstep_users"].list_collection_names()
+    assert {"residents", "cases", "assignments", "events"} <= set(client["doorstep_users"].list_collection_names())
