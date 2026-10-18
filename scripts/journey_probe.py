@@ -70,7 +70,8 @@ async def say(ctx: Context, message, expect: int = 1) -> list[ChatMessage]:
 @probe.on_event("startup")
 async def run(ctx: Context):
     try:
-        await say(ctx, "Start the simulated Zone 3 readiness check", expect=3)
+        await say(ctx, "Start the simulated Zone 3 readiness check", expect=4)
+        await say(ctx, "Show road conditions")
         await say(ctx, "Simulate Maria's reply")
         match = await say(ctx, "Find a match for Maria")
         approved = await say(ctx, primary(card(match[0])))

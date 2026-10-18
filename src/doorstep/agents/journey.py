@@ -33,6 +33,7 @@ from doorstep.integrations.fetch_messages import (
     AcceptRequest,
     AcceptResponse,
     AlertNotification,
+    ClosureNotification,
     ArrivalReport,
     EscalationAck,
     EscalationRequest,
@@ -104,8 +105,10 @@ class Journey:
         except (BackendError, OSError) as err:
             return self.refused(err)
         await ctx.send(self.address_for("CALAMITY"), PollNow(correlation_id=corr, created_at=utc_now()))
-        return ("Simulated official wildfire alert issued for Zone 3 (demo control). The Calamity Checker agent "
-                "is polling the feed now; alert and volunteer-outreach cards will appear here automatically.")
+        await ctx.send(self.address_for("NEWS"), PollNow(correlation_id=corr, created_at=utc_now()))
+        return ("Simulated official wildfire alert issued for Zone 3 (demo control). The Calamity Checker and "
+                "News agents are polling their feeds now; alert, volunteer-outreach and road-condition cards "
+                "will appear here automatically.")
 
     async def on_alert(self, ctx: Context, msg: AlertNotification) -> None:
         """Push the alert to everyone watching, then ask the Volunteer Network agent to reach
@@ -121,6 +124,40 @@ class Journey:
             idempotency_key=f"{alert_id}:outreach"), OutreachResult)
         self.outreach = result
         await self.push(ctx, self.outreach_card(result))
+
+    # -------------------------------------------------------- road closures
+    async def on_closures(self, ctx: Context, msg: ClosureNotification) -> None:
+        try:
+            records = (await self.get_backend().closures(msg.correlation_id)).get("closures", [])
+        except (BackendError, OSError):
+            records = msg.new_records
+        await self.push(ctx, self.road_card(records))
+
+    async def road_conditions(self, corr: str) -> Reply:
+        try:
+            records = (await self.get_backend().closures(corr)).get("closures", [])
+        except (BackendError, OSError) as err:
+            return self.refused(err)
+        return self.road_card(records)
+
+    @staticmethod
+    def road_card(records: list[dict[str, Any]]) -> Card:
+        groups = [("OFFICIAL_CONFIRMED", "Official (blocks illustrative routes)"),
+                  ("UNVERIFIED_REPORT", "Unverified report (caution only)"),
+                  ("CONFLICTING", "Conflicting reports (caution)"), ("EXPIRED", "Expired")]
+        rows = []
+        for state, label in groups:
+            for c in (r for r in records if r.get("state") == state):
+                src = (c.get("sources") or [{}])[0]
+                where = c.get("segment_id") or "not on the demo road map (never used for routing)"
+                rows.append((f"{c['road_name']} · {label}",
+                             f"claims {c.get('claimed_status')} · {src.get('source_type')} · "
+                             f"{src.get('published_at') or 'time unknown'} · {where}"))
+        if not rows:
+            rows.append(("Reports", "none received yet"))
+        rows.append(("Note", "No report does not mean a road is open. Never a safety assessment."))
+        return info_card("Road conditions", rows, "Road conditions from the News agent (simulated feeds):",
+                         "News agent · SYNTHETIC official closures + SYNTHETIC news")
 
     async def push(self, ctx: Context, card: Card | str) -> None:
         for user in list(self.subscribers):

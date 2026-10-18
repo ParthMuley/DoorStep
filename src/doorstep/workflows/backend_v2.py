@@ -103,6 +103,26 @@ class DoorstepBackendV2(DoorstepBackend):
         return await self._request("POST", f"/recovery/{referral_id}/respond", correlation_id, self._v2(
             correlation_id, org_id=org_id, decision=decision, evidence=evidence, idempotency_key=idempotency_key))
 
+    # ---- road closures (News agent)
+    async def news_feed(self, correlation_id: str) -> dict[str, Any]:
+        return await self._request("GET", "/demo/feeds/news", correlation_id)
+
+    async def official_closures_feed(self, correlation_id: str) -> dict[str, Any]:
+        return await self._request("GET", "/demo/feeds/closures", correlation_id)
+
+    async def ingest_closures(self, source: dict[str, Any], items: list[dict[str, Any]], idempotency_key: str,
+                              correlation_id: str) -> dict[str, Any]:
+        return await self._request("POST", "/closures/ingest", correlation_id, self._v2(
+            correlation_id, source=source, items=items, idempotency_key=idempotency_key))
+
+    async def closures(self, correlation_id: str) -> dict[str, Any]:
+        return await self._request("GET", "/closures", correlation_id)
+
+    async def trigger_closure(self, action: str, correlation_id: str, road_name: str | None = None,
+                              headline: str | None = None, body: str | None = None) -> dict[str, Any]:
+        return await self._request("POST", "/demo/closures/trigger", correlation_id, self._v2(
+            correlation_id, action=action, road_name=road_name, headline=headline, body=body))
+
     # ---- card data
     async def dashboard_summary(self, correlation_id: str) -> dict[str, Any]:
         return await self._request("GET", "/dashboard/summary", correlation_id)

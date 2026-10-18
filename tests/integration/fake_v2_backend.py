@@ -368,6 +368,81 @@ def build_v2_router(state: dict[str, Any]) -> APIRouter:
         status = {"ACCEPTED": "ACCEPTED", "DECLINED": "UNRESOLVED", "COMPLETED": "COMPLETED"}[body["decision"]]
         return {"schema_version": V2, "referral_id": referral_id, "status": status, "housing_secured": False}
 
+    # ------------------------------------------------- road closures (contract §5.9)
+    GAZETTEER = {"ridge ave": "seg_ridge_ave", "canyon rd": "seg_canyon_rd"}  # unmapped names never route
+
+    @r.get("/demo/feeds/closures")
+    def official_feed():
+        return {"schema_version": V2, "closures": state["official_feed"]}
+
+    @r.get("/demo/feeds/news")
+    def news_feed():
+        return {"schema_version": V2, "items": state["news_feed"]}
+
+    @r.post("/demo/closures/trigger")
+    async def closures_trigger(request: Request, authorization: str | None = Header(default=None)):
+        if not authed(authorization):
+            return _err(401, "UNAUTHORIZED", "token")
+        body = await request.json()
+        n = len(state["official_feed"]) + len(state["news_feed"]) + 1
+        if body["action"] == "PUBLISH_OFFICIAL":
+            state["official_feed"].append({"closure_id": f"off_{n:03d}", "issuing_authority":
+                                           "SIMULATED_LA_COUNTY_PUBLIC_WORKS", "road_name": body["road_name"],
+                                           "status": "CLOSED", "published_at": _now(), "expires_at": None})
+        elif body["action"] == "PUBLISH_NEWS":
+            state["news_feed"].append({"item_id": f"news_{n:03d}", "source_name": "Fictional Valley Gazette (DEMO)",
+                                       "url": None, "published_at": _now(), "headline": body.get("headline", ""),
+                                       "body": body.get("body", "")})
+        return {"schema_version": V2, "action": body["action"]}
+
+    @r.post("/closures/ingest")
+    async def closures_ingest(request: Request, authorization: str | None = Header(default=None)):
+        if not authed(authorization):
+            return _err(401, "UNAUTHORIZED", "token")
+        body = await request.json()
+        source_type = body["source"]["source_type"]
+        accepted, rejected = [], []
+        for item in body["items"]:
+            key = (body["source"]["source_id"], item["source_item_id"])
+            if key in state["closure_keys"]:
+                continue
+            state["closure_keys"].add(key)
+            cand = item.get("candidate") or {}
+            road = cand.get("road_name", "")
+            if not road:
+                rejected.append({"source_item_id": item["source_item_id"], "reason": "NO_CANDIDATE"})
+                continue
+            # Deterministic state rules (B's job; the agent never sets state).
+            if source_type == "OFFICIAL_SIMULATION" and cand.get("claimed_status") == "CLOSED":
+                st = "OFFICIAL_CONFIRMED"
+            else:
+                st = "UNVERIFIED_REPORT"
+            segment = GAZETTEER.get(road.lower())
+            same = [c for c in state["closures"] if c["segment_id"] and c["segment_id"] == segment]
+            if any(c["claimed_status"] != cand.get("claimed_status") for c in same):
+                st = "CONFLICTING"
+                for c in same:
+                    if c["state"] != "OFFICIAL_CONFIRMED":
+                        c["state"] = "CONFLICTING"
+            state["closure_seq"] += 1
+            rec = {"closure_id": f"closure_{state['closure_seq']:03d}", "road_name": road, "segment_id": segment,
+                   "state": st, "claimed_status": cand.get("claimed_status"),
+                   "used_for_routing": st == "OFFICIAL_CONFIRMED" and segment is not None,
+                   "sources": [{"source_type": source_type, "url": body["source"].get("url"),
+                                "published_at": item.get("published_at"), "headline": item.get("headline"),
+                                "extraction_method": item.get("extraction_method")}], "expires_at": None}
+            state["closures"].append(rec)
+            accepted.append({k: rec[k] for k in ("closure_id", "road_name", "state", "segment_id", "claimed_status",
+                                                 "used_for_routing")} | {"source_type": source_type})
+        return {"schema_version": V2, "accepted": accepted, "rejected": rejected,
+                "new_official_closures": [a for a in accepted if a["state"] == "OFFICIAL_CONFIRMED"],
+                "notify_coordinator": bool(accepted)}
+
+    @r.get("/closures")
+    def closures():
+        return {"schema_version": V2, "closures": state["closures"],
+                "note": "No report does not mean a road is open."}
+
     return r
 
 
@@ -377,7 +452,20 @@ def build_v2_app(db_path: str | None = ":memory:"):
     state: dict[str, Any] = {"features": [], "edit": 1_792_281_600_000, "seen": set(), "ingests": 0, "alert_seq": 0,
                              "proposals": {}, "declined": {}, "assignments": {}, "assign_seq": 0, "esc_seq": 0,
                              "escalations": {}, "ref_seq": 0, "referrals": {}, "service": app.state.service,
-                             "availability": {}, "outreach_keys": {}}
+                             "availability": {}, "outreach_keys": {}, "closures": [], "closure_keys": set(),
+                             "closure_seq": 0,
+                             "official_feed": [{"closure_id": "off_001",
+                                                "issuing_authority": "SIMULATED_LA_COUNTY_PUBLIC_WORKS",
+                                                "road_name": "Ridge Ave", "status": "CLOSED",
+                                                "published_at": "2026-10-17T20:05:00Z", "expires_at": None}],
+                             "news_feed": [{"item_id": "news_001", "source_name": "Fictional Valley Gazette (DEMO)",
+                                            "url": None, "published_at": "2026-10-17T20:07:00Z",
+                                            "headline": "Residents report Canyon Rd blocked by debris (DEMO)",
+                                            "body": "Neighbors say a fallen tree stops traffic near Zone 3. (DEMO)"},
+                                           {"item_id": "news_002", "source_name": "Fictional Valley Gazette (DEMO)",
+                                            "url": None, "published_at": "2026-10-17T20:09:00Z",
+                                            "headline": "Library bake sale raises funds (DEMO)",
+                                            "body": "Volunteers sold 300 cookies. (DEMO)"}]}
     state["cases_created"] = False
     router = build_v2_router(state)
     for route in reversed(router.routes):

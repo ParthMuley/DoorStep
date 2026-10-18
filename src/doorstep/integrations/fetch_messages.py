@@ -132,6 +132,14 @@ class ReportUnavailable(_Msg):
     reason: str
 
 
+# --- News / Road-closure agent -> Doorstep
+class ClosureNotification(_Msg):
+    """New closure records after B classified them. `state` comes from B only:
+    OFFICIAL_CONFIRMED (blocks routes) / UNVERIFIED_REPORT (caution) / CONFLICTING / EXPIRED."""
+    new_records: list[dict[str, Any]]
+    note: str = "No report does not mean a road is open."
+
+
 # --- Doorstep <-> Escalation Simulator
 class EscalationRequest(_Msg):
     escalation_id: str

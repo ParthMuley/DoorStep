@@ -34,6 +34,9 @@ def offline_agents(monkeypatch):
         return None
 
     monkeypatch.setattr(Agent, "_update_agent_status", no_status_update)
+    # .env may enable the real ASI:One API; tests inject fake models explicitly instead.
+    monkeypatch.setenv("USE_LLM_INTENT", "false")
+    monkeypatch.setenv("USE_LLM_EXTRACTION", "false")
 
 
 def make_agent(name: str) -> Agent:

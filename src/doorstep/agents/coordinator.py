@@ -32,7 +32,7 @@ from doorstep.integrations.agentverse_setup import enable_auto_mailbox
 from doorstep.integrations.asi_cards import DEMO_PREFIX, Card, parse_card_selection, text_message
 from doorstep.integrations.asi_one_client import Intent, IntentClient, intent_enabled, keyword_intent
 from doorstep.integrations.fetch_adapter import new_correlation_id
-from doorstep.integrations.fetch_messages import AlertNotification
+from doorstep.integrations.fetch_messages import AlertNotification, ClosureNotification
 from doorstep.workflows.backend_v2 import DoorstepBackendV2
 
 load_dotenv()
@@ -43,7 +43,7 @@ HELP_TEXT = (
     "I coordinate simulated accessible transport, shelter and recovery help for fictional residents "
     "(Maria, David). Try, in order: 'Start the simulated Zone 3 readiness check', 'Simulate Maria's reply', "
     "'Find a match for Maria', then use the card buttons (approve, pickup, arrival, further help). "
-    "'Find a match for David' shows the order-zone safety case. 'Status for Maria' anytime. "
+    "'Find a match for David' shows the order-zone safety case. 'Road conditions' and 'Status for Maria' anytime. "
     "This is not an emergency service; call 911 in a real emergency."
 )
 
@@ -119,6 +119,12 @@ async def handle_alert(ctx: Context, sender: str, msg: AlertNotification):
     ctx.logger.info(f"[{msg.correlation_id}] alert notification: {len(msg.new_alerts)} new, "
                     f"{len(msg.outreach_orgs)} orgs to contact")
     await journey.on_alert(ctx, msg)
+
+
+@journey_proto.on_message(ClosureNotification)
+async def handle_closures(ctx: Context, sender: str, msg: ClosureNotification):
+    ctx.logger.info(f"[{msg.correlation_id}] closure notification: {len(msg.new_records)} new records")
+    await journey.on_closures(ctx, msg)
 
 
 PUSH_TEST_DELAY_SECONDS = 15
@@ -202,6 +208,8 @@ async def run_intent(ctx: Context, intent: Intent, corr: str, sender: str):
         return await journey.recovery(ctx, case_id, False, corr)
     if name == "escalate":
         return await journey.escalate(ctx, case_id, corr)
+    if name == "road_conditions":
+        return await journey.road_conditions(corr)
     if name == "case_status":
         if journey.case(case_id).steps["PROVIDER_ACCEPTED"]:
             return journey.journey_card(case_id, None, note="Journey status.")

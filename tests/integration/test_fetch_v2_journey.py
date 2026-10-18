@@ -16,6 +16,7 @@ from doorstep.agents.calamity_checker import CalamityChecker
 from doorstep.agents.escalation import build_escalation_protocol
 from doorstep.agents.journey import Journey
 from doorstep.agents.matching import build_matching_protocol
+from doorstep.agents.news import NewsAgent
 from doorstep.agents.post_calamity import build_post_calamity_protocol
 from doorstep.agents.volunteer_network import build_network_protocol
 from tests.integration.conftest import make_agent, run_until
@@ -46,8 +47,8 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
     doorstep = make_agent("doorstep")
     doorstep.include(coordinator.chat_proto)
     doorstep.include(coordinator.journey_proto)
-    network, matching, escalation, post, calamity = (
-        make_agent(n) for n in ("network", "matching", "escalation", "post", "calamity"))
+    network, matching, escalation, post, calamity, news = (
+        make_agent(n) for n in ("network", "matching", "escalation", "post", "calamity", "news"))
     user = make_agent("asi_one_user")
 
     backend, _ = make_v2_backend(monkeypatch)
@@ -60,8 +61,9 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
         return True, 200, await backend._request("GET", "/demo/feeds/caloes", "corr"), None
 
     calamity.include(CalamityChecker(lambda: backend, fetch, coordinator_address=lambda: doorstep.address).protocol(3600))
+    news.include(NewsAgent(lambda: backend, coordinator_address=lambda: doorstep.address).protocol(3600))
     for role, a in (("MATCHING", matching), ("ESCALATION", escalation), ("POSTCALAMITY", post),
-                    ("CALAMITY", calamity), ("NETWORK", network)):
+                    ("CALAMITY", calamity), ("NETWORK", network), ("NEWS", news)):
         monkeypatch.setenv(f"{role}_AGENT_ADDRESS", a.address)
     monkeypatch.setattr(coordinator, "get_v2_backend", lambda: backend)
     monkeypatch.setattr(coordinator, "journey", Journey(lambda: backend, coordinator.address_for))
@@ -82,8 +84,9 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
     @user.on_event("startup")
     async def converse(ctx: Context):
         try:
-            # 1. Start: reply + pushed Alert card + pushed Outreach card (no further user message).
-            seen["start"] = await say(ctx, "Start the simulated Zone 3 readiness check", expect=3)
+            # 1. Start: reply + pushed Alert, Outreach and Road-conditions cards (no further user message).
+            seen["start"] = await say(ctx, "Start the simulated Zone 3 readiness check", expect=4)
+            seen["roads"] = await say(ctx, "Show road conditions")
             seen["reply"] = await say(ctx, "Simulate Maria's reply")
             seen["match"] = await say(ctx, "Find a match for Maria")
             seen["approved"] = await say(ctx, primary_selection(card(seen["match"][0])))
@@ -95,12 +98,17 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
         finally:
             done.set()
 
-    await run_until([doorstep, user, network, matching, escalation, post, calamity], done, timeout=120)
+    await run_until([doorstep, user, network, matching, escalation, post, calamity, news], done, timeout=120)
 
     titles = {(card(m) or {}).get("title", text(m)) for m in seen["start"]}
     assert any("Alert detected" in t for t in titles)
     outreach = next(m for m in seen["start"] if "Volunteer outreach" in (card(m) or {}).get("title", ""))
     assert "eastside_rides_demo · la_county:zone_2" in text(outreach) and "available 1" in text(outreach)
+    assert any("Road conditions" in (card(m) or {}).get("title", "") for m in seen["start"])
+    roads = text(seen["roads"][0])
+    assert "Ridge Ave · Official (blocks illustrative routes)" in roads
+    assert "Canyon Rd · Unverified report (caution only)" in roads
+    assert "No report does not mean a road is open" in roads
     assert "Needs confirmed: True" in text(seen["reply"][0])
 
     match = card(seen["match"][0])

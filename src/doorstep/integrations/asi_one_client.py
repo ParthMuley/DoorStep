@@ -60,6 +60,8 @@ TOOLS: list[dict[str, Any]] = [
           "guidance) from recovery organizations.", _RESIDENT, ["resident"]),
     _tool("escalate", "Escalate one resident's case to the simulated authorized response service (used when "
           "ordinary volunteers can't be sent, e.g. inside an evacuation-order zone).", _RESIDENT, ["resident"]),
+    _tool("road_conditions", "Show reported road closures: official (simulated) closures that block "
+          "illustrative routes, and unverified news reports that only add caution."),
     _tool("test_push", "Developer check: send a delayed follow-up message to test unsolicited updates."),
     _tool("help", "Explain what this demo coordinator can do. Use when no other tool fits."),
 ]
@@ -139,6 +141,8 @@ def keyword_intent(text: str) -> Intent:
         return Intent("confirm_arrival", arg)
     if "recovery" in lowered or "further help" in lowered:
         return Intent("request_recovery", arg)
+    if "road" in lowered or "closure" in lowered:
+        return Intent("road_conditions")
     if "escalat" in lowered:
         return Intent("escalate", arg)
     if any(w in lowered for w in ("match", "volunteer", "provider", "offer")):

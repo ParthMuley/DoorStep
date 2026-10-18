@@ -69,3 +69,16 @@ Reviewed `docs/interface-contract.md` v2.0 rev 2 and `docs/DOORSTEP_V2_TEAM_PLAN
   - accept and recovery-respond checked by `org_id` in the body; no `X-Org-Agent`, no per-org agent addresses.
   - The region list is a stand-in until B's geo query lands.
 - **B: contract v2.1 should match these shapes** (or tell A what differs; A adjusts the client in one place, `workflows/backend_v2.py`).
+
+### News / Road-closure agent (2026-10-17)
+- `agents/news.py`:
+  - polls B's simulated official closure feed (posted as `OFFICIAL_SIMULATION`, `STRUCTURED_FEED`);
+  - polls synthetic news; `integrations/closure_extraction.py` extracts the article's *claim* with an ASI:One forced tool call (`asi1-mini`, ~1–2 s). The keyword fallback is used when the API is off or errors; enum-validated.
+  - Posts to `/closures/ingest`, then sends `ClosureNotification` → the Doorstep agent pushes a **Road conditions** card. Also on request: "road conditions".
+- **The double now has** `/demo/feeds/news`, `/demo/feeds/closures`, `/demo/closures/trigger`, `/closures/ingest` and `GET /closures`, with B's state rules:
+  - an official CLOSED claim → `OFFICIAL_CONFIRMED`;
+  - news → `UNVERIFIED_REPORT`;
+  - a contradiction → `CONFLICTING`;
+  - a gazetteer maps road names; unmapped names never route.
+- **Tests run offline:** the shared fixture now forces `USE_LLM_INTENT=false` and `USE_LLM_EXTRACTION=false`, because `.env` enabled the real ASI:One API.
+- **Live (7 agents on mailboxes, 61 s):** Ridge Ave `OFFICIAL_CONFIRMED` (`STRUCTURED_FEED`); Canyon Rd `UNVERIFIED_REPORT` (`ASI_ONE_EXTRACTION`); the bake-sale article was ignored.
