@@ -28,7 +28,7 @@ ORG_COLLECTIONS = {"organizations", "provider_registry", "provider_events"}
 USERS_COLLECTIONS = [
     "residents", "cases", "alerts", "service_requests", "offers", "assignments", "verifications",
     "messages", "escalations", "referrals", "consent_grants", "events", "settings", "counters",
-    "zone_alerts", "feeds", "ingests", "checkins", "synthetic_feed",
+    "zone_alerts", "feeds", "ingests", "checkins", "synthetic_feed", "match_results",
 ]
 
 

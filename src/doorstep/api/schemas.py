@@ -156,3 +156,31 @@ class AlertTriggerBody(Body):
 class OutreachBody(Body):
     alert_id: str
     idempotency_key: Optional[str] = None
+
+
+# ---- contract v2.0 §5.6 / §5.7 (matching, acceptance, escalation) ----
+class MatchSelect(DoorstepModel):
+    volunteer_id: Optional[str] = None
+    site_id: Optional[str] = None
+
+
+class ProposeMatchBody(Body):
+    case_id: str
+    idempotency_key: Optional[str] = None
+    create_proposal: bool = True
+    authorization: str = "SIMULATED_PREAPPROVED"
+    select: Optional[MatchSelect] = None
+
+
+class AcceptV2Body(Body):
+    org_id: str
+    volunteer_id: Optional[str] = None
+    site_id: Optional[str] = None
+    decision: Literal["ACCEPTED", "DECLINED"]
+    idempotency_key: Optional[str] = None
+
+
+class EscalationAckBodyV2(Body):
+    status: Literal["ACKNOWLEDGED_REQUEST_ONLY", "NO_ACKNOWLEDGMENT"]
+    recipient_agent_address: Optional[str] = None
+    idempotency_key: Optional[str] = None

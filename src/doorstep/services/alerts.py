@@ -180,6 +180,18 @@ class AlertService:
                 return {"zone_status": status, "zone_sources": sources, "reason": None}
         return {"zone_status": ZoneStatus.OUTSIDE_KNOWN_ZONES.value, "zone_sources": sources, "reason": None}
 
+    def same_event_alert_ids(self, alert_id: Optional[str]) -> set[str]:
+        """Active simulated alerts of the same calamity type as ``alert_id`` (one wildfire can have several
+        zone records). Volunteer availability given for any of them counts for all of them."""
+        if not alert_id:
+            return set()
+        try:
+            base = self.get_alert(alert_id)
+        except NotFound:
+            return set()
+        return {a.alert_id for a in self._alerts({"active": True, "source_type": SourceType.OFFICIAL_SIMULATION.value})
+                if a.calamity_type == base.calamity_type} | ({alert_id} if base.active else set())
+
     def zone_status_label(self, profile: ResidentProfile) -> str:
         return self.zone_for(profile)["zone_status"]
 
@@ -299,7 +311,10 @@ class AlertService:
             touched = new + changed
             affected = self._affected(touched)
             if freshness == "FRESH":  # nothing is triggered from stale data
-                checkins = self._send_checkins(touched, correlation_id)
+                # All active simulated zones, not only touched ones: residents who registered after the alert
+                # still get one check-in. The (alert, status, resident) record prevents repeats.
+                active_sim = self._alerts({"active": True, "source_type": SourceType.OFFICIAL_SIMULATION.value})
+                checkins = self._send_checkins(active_sim, correlation_id)
                 outreach = self._outreach_orgs([a for a in touched if self._residents_in(a)])
 
         self.events.append("ALERT_FEED_INGESTED", case_id=None, correlation_id=correlation_id,

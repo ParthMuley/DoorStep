@@ -98,7 +98,7 @@ New codes may be added in a contract bump. Codes never change meaning.
 
 **Positive:** `ORG_APPROVED`, `VOLUNTEER_APPROVED`, `CALAMITY_TYPE_SUPPORTED`, `WITHIN_SERVICE_RADIUS`, `AVAILABLE_FOR_THIS_ALERT`, `NEEDS_COVERED`, `WHEELCHAIR_OK`, `TRANSFER_OK`, `OXYGEN_OK`, `PET_OK`, `SERVICE_ANIMAL_OK`, `SEATS_OK`, `STEP_FREE_OK`, `BEDS_OK`, `OUTSIDE_ORDER_ZONE`, `ROUTE_AVOIDS_ORDER_ZONES`.
 
-**Rejection:** `ORG_NOT_APPROVED`, `VOLUNTEER_NOT_APPROVED`, `CALAMITY_TYPE_NOT_SUPPORTED`, `OUTSIDE_SERVICE_RADIUS`, `NOT_ASKED_YET`, `UNAVAILABLE`, `NO_REPLY`, `AVAILABILITY_FROM_OLD_ALERT`, `ALREADY_RESERVED`, `NEEDS_NOT_COVERED` (with `missing_needs: [codes]`), `NO_WHEELCHAIR_SPACE`, `INSUFFICIENT_PET_CAPACITY`, `NO_SEATS`, `NO_BEDS`, `ORDER_ZONE`, `SHELTER_IN_ORDER_ZONE`, `ZONE_STALE`, `ZONE_UNKNOWN`, `ROUTE_THROUGH_ORDER_ZONE`, `ALREADY_DECLINED`.
+**Rejection:** `ORG_NOT_APPROVED`, `VOLUNTEER_NOT_APPROVED`, `CALAMITY_TYPE_NOT_SUPPORTED`, `OUTSIDE_SERVICE_RADIUS`, `NOT_ASKED_YET`, `AWAITING_REPLY` (asked, no answer yet), `UNAVAILABLE`, `NO_REPLY`, `AVAILABILITY_FROM_OLD_ALERT`, `ALREADY_RESERVED`, `NEEDS_NOT_COVERED` (with `missing_needs: [codes]`), `NO_WHEELCHAIR_SPACE`, `INSUFFICIENT_PET_CAPACITY`, `NO_SEATS`, `NO_BEDS`, `ORDER_ZONE`, `SHELTER_IN_ORDER_ZONE`, `ZONE_STALE`, `ZONE_UNKNOWN`, `ROUTE_THROUGH_ORDER_ZONE`, `ALREADY_DECLINED`.
 
 ## 5. HTTP API (B implements, A calls)
 
@@ -188,7 +188,7 @@ B's rules:
 - **Freshness:** from `STATEWIDE_LAST_UPDATED`/`EDIT_DATE` vs `ALERT_STALE_AFTER_SECONDS`.
 - **Dedupe:** by source record + version + zone.
 - **Cancellation:** only on INACTIVE **or** after missing from 2 consecutive successful ingests (Cal OES rebuild gap).
-- **Check-ins:** only for new/changed `OFFICIAL_SIMULATION` WARNING/ORDER alerts, to residents with `wants_help_contact` and `CHECKIN` consent, keyed `alert:status:resident`. 10 identical ingests → 1 check-in.
+- **Check-ins:** every fresh ingest offers a check-in to residents inside any active `OFFICIAL_SIMULATION` WARNING/ORDER zone (so people who registered after the alert are included), to residents with `wants_help_contact` and `CHECKIN` consent, keyed `alert:status:resident`. 10 identical ingests → 1 check-in.
 - **`outreach_orgs`:** approved orgs offering `TRANSPORT` whose `calamity_types` include the alert's type (or `ANY`), within `service_radius_km` of the zone, sorted by distance, top `OUTREACH_MAX_ORGS` (default 3). Returned only for simulated alerts with affected residents. The Doorstep agent sends an `OutreachRequest` to each listed org's agent.
 
 **`GET /alerts/active`**: normalized alerts:
@@ -278,6 +278,9 @@ Eligibility (decision 7 of the plan):
 - route from the volunteer's address doesn't cross an order zone.
 
 Ranking: distance from volunteer to resident, then `volunteer_id`.
+- **Availability counts per event:** a YES given for any currently active simulated alert of the same calamity type counts (one wildfire can have several zone records). Answers tied to a canceled alert don't count.
+- When the resident's own zone blocks matching (ORDER/STALE/UNKNOWN), every volunteer's `reason_codes` starts with that zone code.
+- More 409 codes: `MATCH_PENDING` (a match is still awaiting the volunteer), `ALREADY_ACCEPTED`. If the case was `REQUIRES_COORDINATOR` and a volunteer is later matched, it moves back to `NEEDS_ASSISTANCE`.
 Shelter: needs (incl. 6) ⊆ site `features`, beds ≥ 1, site outside order zones, nearest first.
 
 Response (201 when a match is created; 200 for evaluation-only, no match, or a repeated key):
@@ -323,7 +326,9 @@ Response:
 - **Volunteer `ACCEPTED`:** the resident status moves to PROVIDER_ACCEPTED. B sends the resident `DOORSTEP DEMO: A volunteer has accepted and is on the way (simulated). Estimated arrival about 18 minutes. This is an estimate, not a guarantee.` Pickup details go **only** to that org agent.
 - **`DECLINED`:** the reservation is released, the resident stays `NEEDS_ASSISTANCE`, and `next_alternate: {"volunteer_id","org_id"}` names the next eligible volunteer (call `matches/propose` with `select`). If none is left → `REQUIRES_COORDINATOR`.
 - **Shelter acceptance** does not change the resident status. Arrival requires it.
-- A reply to a `CANCELED`/`DECLINED` assignment → 409 `INVALID_TRANSITION`. Wrong org or volunteer → 403.
+- A reply to a `CANCELED`/`DECLINED` assignment → 409 `INVALID_TRANSITION`. Wrong org or volunteer → 403. `X-Org-Agent` must equal the body's `org_id`.
+- **Volunteer acceptance re-checks the resident's zone.** If an ORDER (or stale data) appeared after the proposal → 409 `UNSAFE_ZONE` / `ZONE_STALE`. A lost reservation → 409 `RESERVATION_LOST`. A shelter with no beds left → 409 `NO_BEDS`.
+- `DECLINED` after `ACCEPTED` (volunteer cancels before pickup) → `assignment_status: CANCELED`, resident back to `NEEDS_ASSISTANCE`, `next_alternate` as above.
 
 **`POST /assignments/{assignment_id}/pickup`** (token)
 ```json
@@ -339,7 +344,7 @@ Required: volunteer **and** (resident **or** caregiver/emergency contact). If `c
 {"evidence":{"type":"SHELTER_CHECKIN","shelter_org_id":"civic_shelter_demo","site_id":"dest_center_a","shelter_confirmed":true,
   "source":"SIMULATED","report_id":"arrival_rep_001"},"idempotency_key":"assign_001:arrival"}
 ```
-Required: pickup already confirmed, the shelter **accepted**, and a check-in by that shelter (or resident/caregiver + volunteer). On arrival B releases the volunteer's reservation and asks the resident (simulated SMS) whether they need further help.
+Required: pickup already confirmed, the shelter **accepted**, and a check-in by that shelter (or resident/caregiver + volunteer). `shelter_org_id` and `site_id` must match the accepted shelter. On arrival B releases the volunteer's reservation and asks the resident (simulated SMS) whether they need further help.
 Pickup/arrival response: `assignment_id, case_id, assignment_status, resident_status, confirmed_pickup_at, confirmed_arrival_at, map, next_step, duplicate`. Green only after arrival.
 
 ### 5.7 Escalation (Escalation agent ↔ B)

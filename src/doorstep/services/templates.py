@@ -43,6 +43,12 @@ TEMPLATES: dict[str, dict[str, str]] = {
                "compartamos sus necesidades de accesibilidad con una organización de apoyo para "
                "solicitar ayuda con alojamiento temporal? Esto es una simulación."),
     },
+    "help_on_the_way": {
+        "en": ("DOORSTEP DEMO: A volunteer has accepted and is on the way (simulated). Estimated arrival about "
+               "{eta} minutes. This is an estimate, not a guarantee. This is a simulation."),
+        "es": ("DOORSTEP DEMO: Un voluntario aceptó y va en camino (simulado). Llegada estimada en unos {eta} "
+               "minutos. Es una estimación, no una garantía. Esto es una simulación."),
+    },
     "volunteer_outreach": {
         "en": ("DOORSTEP DEMO: A simulated {calamity} alert affects {zone}. {org} is asking: can you help "
                "with accessible transport? Reply YES or NO. This is a simulation."),

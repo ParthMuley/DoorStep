@@ -43,6 +43,20 @@ Also available:
 - `GET /cases/{id}` now includes `zone_status` and `zone_sources`.
 - Scenario C: `{"action":"FREEZE_FEED","freeze_age_minutes":30}`, then ingest. Zones go STALE and nothing is triggered.
 
+## v2 endpoints available now (B4: matching, acceptance, escalation)
+
+Full flow (scripted in `doorstep.demo.scenarios.run_scenario_{a,b,c}_v2`; `scripts/smoke_test.sh` runs v1 and v2):
+1. Alert + outreach (B3). Volunteers answer YES/NO.
+2. The resident replies and confirms needs (`POST /cases/{id}/responses`, as before).
+3. `POST /matches/propose {case_id, create_proposal:false}`: explained eligible/rejected volunteers and shelters (for "show suitable volunteers").
+4. `POST /matches/propose {case_id, idempotency_key}` → 201 match. The volunteer is reserved atomically, and the match includes `org_agent_address`, `volunteer_id`, `site_id`, `shared_with_volunteer`, `eta_estimate`.
+5. Org agents answer on the same id: `POST /assignments/{id}/accept` with `X-Org-Agent` = body `org_id`, and `volunteer_id` (transport) or `site_id` (shelter).
+   - Volunteer ACCEPTED: resident gets "help is on the way" + ETA; `pickup_details` go only to that org.
+   - DECLINED: `next_alternate` names the next eligible volunteer; propose again with `select`.
+6. Pickup: `POST /assignments/{id}/pickup` with `{"type":"VOLUNTEER_AND_RESIDENT_CONFIRMATION","volunteer_confirmed":true,"resident_confirmed":true}`.
+7. Arrival: `POST /assignments/{id}/arrival` with `{"type":"SHELTER_CHECKIN","shelter_org_id":…,"site_id":…,"shelter_confirmed":true}`. Green; the volunteer is released.
+8. Order zone (David): propose returns `no_match_reason: ORDER_ZONE`. Then `POST /cases/{id}/escalate {reason:"ACTIVE_EVACUATION_ORDER_ZONE"}` → `REQUESTED`, and the Escalation agent → `POST /escalations/{id}/ack {status:"ACKNOWLEDGED_REQUEST_ONLY"}`. Set `AUTO_ESCALATION_ACK=false` when the agent runs (default `true` auto-acks for local runs).
+
 ## Contract v1.0 conformance
 
 - Paths, request bodies, response fields, status codes (201 on create, 200 on a repeated idempotency key) and error codes all follow Section 3.

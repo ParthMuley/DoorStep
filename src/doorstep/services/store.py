@@ -101,6 +101,39 @@ class Store:
             {"$set": {"volunteers.$.availability": a.model_dump(mode="json")}})
         return result.matched_count == 1
 
+    def reserve_volunteer(self, org_id: str, volunteer_id: str, case_id: str, alert_ids) -> bool:
+        """Atomic: reserve only if AVAILABLE for one of ``alert_ids`` and not reserved by another case.
+        Re-reserving for the same case is a no-op success."""
+        coll = self.db.coll("organizations")
+        same = coll.find_one({"_id": org_id, "volunteers": {"$elemMatch": {
+            "volunteer_id": volunteer_id, "reserved_case_id": case_id}}})
+        if same:
+            return True
+        result = coll.update_one(
+            {"_id": org_id, "volunteers": {"$elemMatch": {
+                "volunteer_id": volunteer_id, "reserved_case_id": None,
+                "availability.state": "AVAILABLE",
+                "availability.alert_id": {"$in": list(alert_ids) if not isinstance(alert_ids, str) else [alert_ids]}}}},
+            {"$set": {"volunteers.$.reserved_case_id": case_id}})
+        return result.modified_count == 1
+
+    def release_volunteer(self, org_id: str, volunteer_id: str, case_id: str) -> bool:
+        result = self.db.coll("organizations").update_one(
+            {"_id": org_id, "volunteers": {"$elemMatch": {"volunteer_id": volunteer_id, "reserved_case_id": case_id}}},
+            {"$set": {"volunteers.$.reserved_case_id": None}})
+        return result.modified_count == 1
+
+    def take_bed(self, org_id: str, site_id: str) -> bool:
+        """Atomic: decrement a shelter site's beds only if one is left."""
+        result = self.db.coll("organizations").update_one(
+            {"_id": org_id, "shelter_sites": {"$elemMatch": {"site_id": site_id, "beds_available": {"$gte": 1}}}},
+            {"$inc": {"shelter_sites.$.beds_available": -1}})
+        return result.modified_count == 1
+
+    def return_bed(self, org_id: str, site_id: str) -> None:
+        self.db.coll("organizations").update_one(
+            {"_id": org_id, "shelter_sites.site_id": site_id}, {"$inc": {"shelter_sites.$.beds_available": 1}})
+
     def record_provider_event(self, key: str, payload: dict) -> tuple[dict, bool]:
         """Idempotent provider-side event. Returns (stored payload, created?)."""
         coll = self.db.coll("provider_events")
@@ -250,6 +283,9 @@ class Store:
 
     def save_escalation(self, e: Escalation) -> None:
         self._upsert("escalations", e.escalation_id, e)
+
+    def get_escalation(self, escalation_id: str) -> Escalation:
+        return self._require("escalations", {"_id": escalation_id}, Escalation, escalation_id)
 
     def escalation_by_key(self, key: str) -> Optional[Escalation]:
         return self._get("escalations", {"idempotency_key": key}, Escalation)

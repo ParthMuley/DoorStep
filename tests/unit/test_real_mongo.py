@@ -36,6 +36,13 @@ def test_scenarios_on_real_mongodb(monkeypatch):
                             headers={"Authorization": "Bearer change-me-local-demo-token"})
         assert run_scenario_a(client, log=quiet)["resident_status"] == "ARRIVAL_CONFIRMED"
         assert run_scenario_b(client, log=quiet)["unresolved"] is True
+        # Contract v2.0 flow: alert -> outreach -> volunteer match/reservation -> accept -> pickup -> shelter.
+        from doorstep.demo.scenarios import run_scenario_a_v2, run_scenario_b_v2, run_scenario_c_v2
+        client.post("/demo/reset")
+        assert run_scenario_a_v2(client, log=quiet)["resident_status"] == "ARRIVAL_CONFIRMED"
+        assert run_scenario_b_v2(client, log=quiet)["unresolved"] is True
+        client.post("/demo/reset")
+        assert run_scenario_c_v2(client, log=quiet)["zone_status"] == "STALE"
     finally:
         real.drop_database(users)
         real.drop_database(orgs)

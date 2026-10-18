@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from doorstep.models import SCHEMA_VERSION
@@ -251,6 +251,44 @@ def org_outreach(org_id: str, body: s.OutreachBody, _: str = Depends(require_org
 @write.post("/sim/outreach/{alert_id}/deadline")
 def sim_outreach_deadline(alert_id: str, service: DoorstepService = Depends(svc)):
     return out(service.alerts.outreach_deadline(alert_id), version=V2)
+
+
+@write.post("/matches/propose")
+def matches_propose(body: s.ProposeMatchBody, corr: Optional[str] = Depends(correlation_header),
+                    service: DoorstepService = Depends(svc)):
+    sel = body.select or s.MatchSelect()
+    view, created = service.matching.propose(
+        body.case_id, idempotency_key=body.idempotency_key, create_proposal=body.create_proposal,
+        authorization=body.authorization, select_volunteer=sel.volunteer_id, select_site=sel.site_id,
+        correlation_id=pick(corr, body))
+    return out(view, 201 if created else 200, V2)
+
+
+@write.post("/assignments/{assignment_id}/accept")
+def assignment_accept(assignment_id: str, body: s.AcceptV2Body, x_org_agent: Optional[str] = Header(default=None),
+                      corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
+    if x_org_agent != body.org_id:
+        raise HTTPException(status_code=403, detail="X-Org-Agent must match org_id")
+    return out(service.matching.accept(
+        assignment_id, org_id=body.org_id, volunteer_id=body.volunteer_id, site_id=body.site_id,
+        decision=body.decision, idempotency_key=body.idempotency_key, correlation_id=pick(corr, body)), version=V2)
+
+
+@write.post("/cases/{case_id}/escalate")
+def case_escalate(case_id: str, body: s.EscalateBody, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    view, created = service.matching.escalate(case_id, body.reason, idempotency_key=body.idempotency_key,
+                                              correlation_id=pick(corr, body))
+    return out(view, 201 if created else 200, V2)
+
+
+@write.post("/escalations/{escalation_id}/ack")
+def escalation_ack(escalation_id: str, body: s.EscalationAckBodyV2, corr: Optional[str] = Depends(correlation_header),
+                   service: DoorstepService = Depends(svc)):
+    return out(service.matching.acknowledge(escalation_id, body.status,
+                                            recipient_agent_address=body.recipient_agent_address,
+                                            idempotency_key=body.idempotency_key,
+                                            correlation_id=pick(corr, body)), version=V2)
 
 
 # ------------------------------------------------- message simulator (B extras)

@@ -60,6 +60,7 @@ from .errors import (
 from .event_log import EventLog
 from .registry import RegistryService
 from .alerts import AlertService
+from .matching_v2 import MatchService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -88,6 +89,7 @@ class DoorstepService:
         self.registry = RegistryService(db, self.store, self.events)
         self.graph = graph or build_demo_graph()
         self.alerts = AlertService(self)
+        self.matching = MatchService(self)
         self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
@@ -166,9 +168,20 @@ class DoorstepService:
                            data={"message_id": msg.message_id, "template_id": template_id, "simulated": True})
         return msg
 
+    def _destination_label(self, destination: Assignment) -> str:
+        if destination.site_id:
+            org = self.store.find_organization(destination.provider_id)
+            site = next((s for s in (org.shelter_sites if org else []) if s.site_id == destination.site_id), None)
+            if site:
+                return site.name
+        return self._provider_name(destination.provider_id)
+
     def _provider_name(self, provider_id: str) -> str:
         reg = self.store.get_registration(provider_id)
-        return reg.display_name if reg else provider_id
+        if reg:
+            return reg.display_name
+        org = self.store.find_organization(provider_id)
+        return org.name if org else provider_id
 
     def _party_for_role(self, resident: Resident, granted_by: str) -> str:
         """Map RESIDENT/CAREGIVER (or a direct id) to the party id."""
@@ -646,7 +659,10 @@ class DoorstepService:
                                       reason="transport provider accepted", correlation_id=corr)
             self.events.append("PICKUP_DETAILS_RELEASED", case_id=a.case_id, correlation_id=corr,
                                actor=a.provider_id, data={"assignment_id": a.assignment_id})
-            self._message_resident(case, "provider_accepted", corr, provider=name)
+            if a.volunteer_id:  # contract v2: a registered volunteer accepted
+                self._message_resident(case, "help_on_the_way", corr, eta=str(a.eta_minutes or "?"))
+            else:
+                self._message_resident(case, "provider_accepted", corr, provider=name)
             dest = self.store.accepted_assignment(a.case_id, DESTINATION)
             case.next_step = ("Awaiting pickup confirmation." if dest
                               else "Transport accepted; destination acceptance still needed before arrival.")
@@ -797,8 +813,12 @@ class DoorstepService:
                                      "evidence": evidence.type, "party_ids_verified": ids_verified})
             self._set_resident_status(case, R.ARRIVAL_CONFIRMED, assignment=a, reason="arrival evidence recorded",
                                       correlation_id=corr)
+            if a.volunteer_id:  # free the volunteer for other cases
+                self.store.release_volunteer(a.provider_id, a.volunteer_id, case.case_id)
+                self.events.append("VOLUNTEER_RELEASED", case_id=case.case_id, correlation_id=corr,
+                                   data={"org_id": a.provider_id, "volunteer_id": a.volunteer_id})
             self._message_resident(case, "arrival_confirmed", corr,
-                                   destination=self._provider_name(destination.provider_id))
+                                   destination=self._destination_label(destination))
             case.next_step = "Ask resident for consent before any recovery-support referral."
             self._save_case(case)
         return self._evidence_view(a, case, corr, False)
@@ -999,7 +1019,7 @@ class DoorstepService:
         referrals = self.store.referrals_for_case(case_id)
         transport = self.store.accepted_assignment(case_id, TRANSPORT)
         pending_transport = next((a for a in reversed(self.store.assignments_for_case(case_id, TRANSPORT))
-                                  if a.status == S.AWAITING_PROVIDER), None)
+                                  if a.status in (S.AWAITING_PROVIDER, S.PROPOSED)), None)
         shown = transport or pending_transport
         destination = self.store.accepted_assignment(case_id, DESTINATION)
         color, label = map_color(case.resident_status)
@@ -1021,7 +1041,11 @@ class DoorstepService:
             "active_assignment": None if shown is None else {
                 "assignment_id": shown.assignment_id, "provider_id": shown.provider_id,
                 "service_status": shown.status, "confirmed_pickup_at": shown.confirmed_pickup_at,
-                "confirmed_arrival_at": shown.confirmed_arrival_at},
+                "confirmed_arrival_at": shown.confirmed_arrival_at,
+                **({"org_id": shown.provider_id, "volunteer_id": shown.volunteer_id,
+                    "vehicle_type": shown.vehicle_type, "assignment_status": shown.status,
+                    "eta": {"minutes": shown.eta_minutes, "label": "Illustrative estimate, not a guarantee"}}
+                   if shown.volunteer_id else {})},
             "escalations": [{"escalation_id": e.escalation_id, "reason": e.reason, "status": e.status,
                              "assistance_confirmed": False} for e in escalations],
             "referrals": [{"referral_id": r.referral_id, "status": r.status,
@@ -1035,7 +1059,7 @@ class DoorstepService:
             "needs": case.needs.model_dump(),
             "destination_assignment": None if destination is None else {
                 "assignment_id": destination.assignment_id, "provider_id": destination.provider_id,
-                "service_status": destination.status},
+                "service_status": destination.status, "site_id": destination.site_id},
             "map": {"color": color, "label": label},
             "unresolved": unresolved,
             "next_step": case.next_step,

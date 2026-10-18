@@ -173,6 +173,132 @@ def run_scenario_b(client, log=print) -> dict[str, Any]:
     return final
 
 
+# =================================================================== contract v2.0 flow
+def _ok2(resp, *expected: int) -> dict[str, Any]:
+    expected = expected or (200,)
+    if resp.status_code not in expected:
+        raise ScenarioFailure(f"Expected HTTP {expected}, got {resp.status_code}: {resp.text}")
+    body = resp.json()
+    if body.get("schema_version") != "2.0":
+        raise ScenarioFailure(f"Response missing schema_version 2.0: {body}")
+    return body
+
+
+def _org(org_id: str) -> dict[str, str]:
+    return {"X-Org-Agent": org_id}
+
+
+def start_alert_v2(client, log=print) -> dict[str, Any]:
+    r = _ok2(client.post("/demo/alerts/trigger", json={"action": "ISSUE", "preset": "ZONE_3_WILDFIRE",
+                                                       "poll_now": True}))
+    poll = r["poll_result"]
+    _check(poll["feed_freshness"] == "FRESH", "synthetic feed should be fresh")
+    zones = {c["case_id"]: c["zone_status"] for c in poll["affected_cases"]}
+    _check(zones == {MARIA: "WARNING", DAVID: "ORDER"}, f"unexpected zones {zones}")
+    _check(len(poll["checkins_sent"]) == 2, "one check-in per affected resident")
+    orgs = [o["org_id"] for o in poll["outreach_orgs"]]
+    _check("flood_only_demo" not in orgs and "unlisted_vans_demo" not in orgs, "only fire-capable approved orgs")
+    log(f"V2-1 alert ingested: zones={zones}, outreach orgs={orgs}")
+    return poll
+
+
+def run_scenario_a_v2(client, log=print) -> dict[str, Any]:
+    poll = start_alert_v2(client, log)
+    alert_id = next(a["alert_id"] for a in poll["new_alerts"] if a["status"] == "WARNING")
+    for org in [o["org_id"] for o in poll["outreach_orgs"]]:
+        _ok2(client.post(f"/orgs/{org}/outreach", json={"alert_id": alert_id}, headers=_org(org)))
+    replies = {"sim_phone_sarah": "YES", "sim_phone_joe": "YES", "sim_phone_maya": "NO", "sim_phone_lee": "SI"}
+    for phone, text in replies.items():
+        _ok(client.post("/sim/inbound", json={"sender": phone, "text": text, "external_id": f"v2-{phone}"}))
+    log("V2-2 volunteers asked by their own orgs; Sarah/Joe/Lee yes, Maya no")
+
+    _ok(client.post(f"/cases/{MARIA}/responses", json={"text": MARIA_SPANISH_REPLY, "language": "es",
+                                                       "sender": seed.MARIA_SENDER, "external_id": "v2-maria-1"}))
+    _ok(client.post(f"/cases/{MARIA}/responses", json={"text": "SI", "language": "es",
+                                                       "sender": seed.MARIA_SENDER, "external_id": "v2-maria-2"}))
+    log("V2-3 Maria asked for help in Spanish and confirmed needs")
+
+    ev = _ok2(client.post("/matches/propose", json={"case_id": MARIA, "create_proposal": False}))
+    vols = ev["evaluation"]["volunteers"]
+    _check(vols["eligible"][0]["volunteer_id"] == "volunteer_sarah", "Sarah should rank first")
+    joe = next(v for v in vols["rejected"] if v["volunteer_id"] == "volunteer_joe")
+    _check("NEEDS_NOT_COVERED" in joe["reason_codes"] and joe["missing_needs"] == [1, 2],
+           "closer sedan rejected: wheelchair + transfer not covered")
+    log(f"V2-4 suitable: {[v['volunteer_id'] for v in vols['eligible']]}; Joe rejected {joe['reason_codes']}")
+
+    m = _ok2(client.post("/matches/propose", json={"case_id": MARIA, "idempotency_key": f"{MARIA}:match:v1"}), 201)
+    match = m["match"]
+    _check(match["volunteer_id"] == "volunteer_sarah" and match["site_id"] == "dest_center_a" and match["reserved"],
+           "Sarah + civic center, volunteer reserved")
+    _check(_ok2(client.post("/matches/propose", json={"case_id": MARIA, "idempotency_key": f"{MARIA}:match:v1"}))
+           ["duplicate"], "repeated key returns the original match")
+    aid = match["assignment_id"]
+    log(f"V2-5 match {aid}: Sarah ({match['vehicle_type']}) + {match['site_id']}, ETA ~{match['eta_estimate']['minutes']} min")
+
+    acc = _ok2(client.post(f"/assignments/{aid}/accept", headers=_org("eastside_rides_demo"),
+                           json={"org_id": "eastside_rides_demo", "volunteer_id": "volunteer_sarah",
+                                 "decision": "ACCEPTED"}))
+    _check(acc["resident_status"] == "PROVIDER_ACCEPTED" and acc["help_on_the_way_sent"], "help on the way sent")
+    _check(acc["pickup_details"]["pickup_point"].startswith("SYNTHETIC"), "pickup point only after acceptance")
+    _check(acc["confirmed_pickup_at"] is None and acc["confirmed_arrival_at"] is None, "acceptance != pickup")
+    _ok2(client.post(f"/assignments/{aid}/accept", headers=_org("civic_shelter_demo"),
+                     json={"org_id": "civic_shelter_demo", "site_id": "dest_center_a", "decision": "ACCEPTED"}))
+    log("V2-6 volunteer accepted (resident told help is on the way, ETA is an estimate); shelter bed confirmed")
+
+    p = _ok(client.post(f"/assignments/{aid}/pickup", json={"evidence": {
+        "type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True, "resident_confirmed": True,
+        "code_verified": True, "confirmations": [{"party": "volunteer", "party_id": "volunteer_sarah"},
+                                                 {"party": "resident", "party_id": "resident_001"}]}}))
+    _check(p["resident_status"] == "PICKUP_CONFIRMED" and p["confirmed_arrival_at"] is None, "pickup != arrival")
+    a = _ok(client.post(f"/assignments/{aid}/arrival", json={"evidence": {
+        "type": "SHELTER_CHECKIN", "shelter_org_id": "civic_shelter_demo", "site_id": "dest_center_a",
+        "shelter_confirmed": True}}))
+    _check(a["resident_status"] == "ARRIVAL_CONFIRMED", "arrival -> green")
+    log("V2-7 pickup then shelter check-in -> green")
+
+    final = _ok(client.get(f"/cases/{MARIA}"))
+    _check(final["map"]["color"] == "green" and final["evidence"]["timeline_replay_matches_status"], "green + replay")
+    log("V2-A PASS\n" + final["summary_text"])
+    return final
+
+
+def run_scenario_b_v2(client, log=print) -> dict[str, Any]:
+    _ok(client.post(f"/cases/{DAVID}/responses", json={"text": "1 NEED HELP", "language": "en",
+                                                       "sender": seed.DAVID_SENDER, "external_id": "v2-david-1"}))
+    _ok(client.post(f"/cases/{DAVID}/responses", json={"text": "YES", "language": "en",
+                                                       "sender": seed.DAVID_SENDER, "external_id": "v2-david-2"}))
+    m = _ok2(client.post("/matches/propose", json={"case_id": DAVID}))
+    _check(m["match"] is None and m["no_match_reason"] == "ORDER_ZONE" and m["escalation_required"],
+           "no ordinary volunteer inside an active order zone")
+    esc = _ok2(client.post(f"/cases/{DAVID}/escalate", json={"reason": "ACTIVE_EVACUATION_ORDER_ZONE",
+                                                             "idempotency_key": f"{DAVID}:escalation:v1"}), 201)
+    if esc["status"] == "REQUESTED":  # an Escalation agent would acknowledge; simulate it
+        esc = _ok2(client.post(f"/escalations/{esc['escalation_id']}/ack",
+                               json={"status": "ACKNOWLEDGED_REQUEST_ONLY"}))
+    _check(esc["status"] == "ACKNOWLEDGED_REQUEST_ONLY" and esc["assistance_confirmed"] is False, "receipt only")
+    final = _ok(client.get(f"/cases/{DAVID}"))
+    _check(final["unresolved"] and final["map"]["color"] == "black", "David stays unresolved")
+    log("V2-B PASS\n" + final["summary_text"])
+    return final
+
+
+def run_scenario_c_v2(client, log=print) -> dict[str, Any]:
+    start_alert_v2(client, log)
+    _ok(client.post(f"/cases/{MARIA}/responses", json={"text": "1", "language": "es", "sender": seed.MARIA_SENDER,
+                                                       "external_id": "v2c-1"}))
+    _ok(client.post(f"/cases/{MARIA}/responses", json={"text": "SI", "language": "es", "sender": seed.MARIA_SENDER,
+                                                       "external_id": "v2c-2"}))
+    r = _ok2(client.post("/demo/alerts/trigger", json={"action": "FREEZE_FEED", "freeze_age_minutes": 30,
+                                                       "poll_now": True}))
+    _check(r["poll_result"]["feed_freshness"] == "STALE", "frozen feed goes stale")
+    m = _ok2(client.post("/matches/propose", json={"case_id": MARIA}))
+    _check(m["match"] is None and m["no_match_reason"] == "ZONE_STALE", "stale data -> no assignment")
+    final = _ok(client.get(f"/cases/{MARIA}"))
+    _check(final["zone_status"] == "STALE" and final["map"]["color"] != "green", "nobody marked safe")
+    log("V2-C PASS: stale feed -> STALE zones, matching refused")
+    return final
+
+
 def main(argv: list[str] | None = None) -> int:
     import httpx
 
@@ -181,17 +307,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--token", default=os.environ.get("DEMO_AUTH_TOKEN") or "change-me-local-demo-token")
     parser.add_argument("--scenario", choices=["a", "b", "both"], default="both")
     parser.add_argument("--no-reset", action="store_true")
+    parser.add_argument("--flow", choices=["v1", "v2", "both"], default="both")
     args = parser.parse_args(argv)
     headers = {"Authorization": f"Bearer {args.token}", "X-Correlation-ID": "corr_smoke"}
     with httpx.Client(base_url=args.base_url, headers=headers, timeout=10) as client:
         _ok(client.get("/health"))
-        if not args.no_reset:
-            _ok(client.post("/demo/reset"))
         try:
-            if args.scenario in ("a", "both"):
-                run_scenario_a(client)
-            if args.scenario in ("b", "both"):
-                run_scenario_b(client)
+            if args.flow in ("v1", "both"):
+                if not args.no_reset:
+                    _ok(client.post("/demo/reset"))
+                if args.scenario in ("a", "both"):
+                    run_scenario_a(client)
+                if args.scenario in ("b", "both"):
+                    run_scenario_b(client)
+            if args.flow in ("v2", "both"):
+                _ok(client.post("/demo/reset"))
+                if args.scenario in ("a", "both"):
+                    run_scenario_a_v2(client)
+                if args.scenario in ("b", "both"):
+                    if args.scenario == "b":
+                        start_alert_v2(client)
+                    run_scenario_b_v2(client)
+                _ok(client.post("/demo/reset"))
+                run_scenario_c_v2(client)
         except ScenarioFailure as exc:
             print(f"FAIL: {exc}", file=sys.stderr)
             return 1

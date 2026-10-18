@@ -21,10 +21,13 @@ def _verify_party_ids(evidence: Evidence, resident: Resident, transport: Assignm
     if not evidence.confirmations:
         return False
     known = {P.RESIDENT.value: resident.resident_id, P.TRANSPORT_PROVIDER.value: transport.provider_id}
+    if transport.volunteer_id:
+        known[P.VOLUNTEER.value] = transport.volunteer_id
     if resident.caregiver:
         known[P.CAREGIVER.value] = resident.caregiver.caregiver_id
     if destination:
         known[P.DESTINATION_PROVIDER.value] = destination.provider_id
+        known[P.SHELTER.value] = destination.provider_id
     for c in evidence.confirmations:
         if known.get(c.party) != c.party_id:
             raise InsufficientEvidence(f"Confirmation from unknown or mismatched party {c.party}:{c.party_id}",
@@ -33,8 +36,13 @@ def _verify_party_ids(evidence: Evidence, resident: Resident, transport: Assignm
 
 
 def _parties(evidence: Evidence) -> set[str]:
-    """Union of the boolean flags and any identified confirmations."""
+    """Union of the boolean flags and any identified confirmations.
+    v2 parties map onto v1 roles: volunteer = transport provider, shelter = destination provider."""
     parties = {c.party for c in evidence.confirmations}
+    if P.VOLUNTEER.value in parties or evidence.volunteer_confirmed:
+        parties.add(P.TRANSPORT_PROVIDER.value)
+    if P.SHELTER.value in parties:
+        parties.add(P.DESTINATION_PROVIDER.value)
     if evidence.resident_confirmed:
         parties.add(P.RESIDENT.value)
     if evidence.caregiver_confirmed:
@@ -64,7 +72,13 @@ def check_arrival_evidence(evidence: Evidence, resident: Resident, transport: As
     if evidence.destination_provider_id and evidence.destination_provider_id != destination.provider_id:
         raise InsufficientEvidence("Check-in is not from the agreed destination provider",
                                    reasons=["WRONG_DESTINATION_PROVIDER"])
+    if evidence.shelter_org_id and evidence.shelter_org_id != destination.provider_id:
+        raise InsufficientEvidence("Check-in is not from the agreed shelter", reasons=["WRONG_SHELTER"])
+    if evidence.site_id and destination.site_id and evidence.site_id != destination.site_id:
+        raise InsufficientEvidence("Check-in is not at the agreed shelter site", reasons=["WRONG_SHELTER_SITE"])
     parties = _parties(evidence)
+    if evidence.type == "SHELTER_CHECKIN" and evidence.shelter_confirmed and evidence.shelter_org_id:
+        parties.add(P.DESTINATION_PROVIDER.value)
     if evidence.provider_confirmed:
         if evidence.type == "DESTINATION_CHECKIN" and evidence.destination_provider_id:
             parties.add(P.DESTINATION_PROVIDER.value)
