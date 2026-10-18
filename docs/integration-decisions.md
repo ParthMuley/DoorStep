@@ -103,3 +103,10 @@ Transcript: `var/logs/journey_probe.txt` (local, not committed).
 ## Rev 3 live run (2026-10-17)
 
 The same journey ran live with **one Volunteer Network agent** instead of 5 org agents. The Outreach card lists orgs by region, nearest first (`neighbor_sedans_demo · la_county:zone_3 (0.9 km)`, `eastside_rides_demo · la_county:zone_2 (4.1 km)`, `red_cross_demo · la_county:zone_4 (7.9 km)`). The Agentverse account still holds stale agents (`Agent limit reached 10/8`), so the Volunteer Network and Calamity Checker ran on local endpoints (`LOCAL_ONLY_AGENTS`).
+
+## All agents on Agentverse mailboxes (2026-10-17)
+
+- At the user's request, five stale registrations were removed with the SDK's `uagents.mailbox.unregister_in_agentverse` (the Inspector's Disconnect call): the old v1 Transport and Destination agents and the Eastside, Red Cross and Civic Shelter org agents. Each now returns 404 on `GET {agents_api}/{address}`.
+- **Now on mailboxes:** Doorstep, Volunteer Network, Matching, Escalation, Post-Calamity, Calamity Checker (6 of the account's 8). `LOCAL_ONLY_AGENTS` is empty.
+- **The 2 remaining slots** are for the News and Route agents.
+- **Live journey probe:** 58 s end to end, every hop through Agentverse.
