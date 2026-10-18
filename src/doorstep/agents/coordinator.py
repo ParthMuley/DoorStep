@@ -29,6 +29,7 @@ from uagents_core.contrib.protocols.chat import (
 from doorstep.agents import coordinator_actions as actions
 from doorstep.integrations.agentverse_setup import enable_auto_mailbox
 from doorstep.integrations.asi_cards import Card, parse_card_selection
+from doorstep.integrations.asi_one_client import Intent, IntentClient, intent_enabled, keyword_intent
 from doorstep.integrations.fetch_adapter import new_correlation_id
 
 load_dotenv()
@@ -115,32 +116,67 @@ async def _delayed_push(ctx: Context, sender: str, correlation_id: str) -> None:
                                            "without sending another message, unsolicited updates work."))
 
 
-async def route(ctx: Context, text: str, correlation_id: str, sender: str = "") -> str | Card:
-    # Card clicks arrive as JSON of the CTA selection; prose falls through to keywords.
+def get_intent_client() -> IntentClient | None:
+    """Factory so tests can inject a fake model. None when LLM intent is disabled."""
+    return IntentClient() if intent_enabled() else None
+
+
+async def choose_intent(text: str, correlation_id: str) -> Intent:
+    """Card click (selection JSON) -> ASI:One tool choice -> deterministic keywords."""
     selection = parse_card_selection(text)
     if selection and selection.get("action"):
-        return await route_selection(ctx, selection, correlation_id)
-    # Minimal keyword routing; ASI:One tool-calling intent + LangGraph replace this later.
-    lowered = text.lower()
-    if "test push" in lowered:
+        return selection_intent(selection)
+    client = get_intent_client()
+    if client is not None:
+        intent = await client.choose(text, correlation_id)
+        if intent is not None:
+            # The model must not guess who a request is about: a resident chosen by the
+            # model counts only if the user actually named them.
+            resident = intent.args.get("resident")
+            if resident and resident not in text.lower():
+                return Intent("clarify_resident", {"tool": intent.name}, source="ASI_ONE")
+            return intent
+    return keyword_intent(text)
+
+
+CARD_ACTIONS = {"case_status": "case_status", "show_matches": "show_suitable_volunteers"}
+
+
+def selection_intent(selection: dict) -> Intent:
+    name = CARD_ACTIONS.get(selection["action"], f"unsupported:{selection['action']}")
+    case_id = selection.get("case_id") or actions.DEFAULT_CASE
+    return Intent(name, {"case_id": case_id}, source="CARD")
+
+
+def case_of(intent: Intent) -> str:
+    if "case_id" in intent.args:
+        return intent.args["case_id"]
+    return actions.CASES_BY_NAME.get(intent.args.get("resident", ""), actions.DEFAULT_CASE)
+
+
+async def route(ctx: Context, text: str, correlation_id: str, sender: str = "") -> str | Card:
+    intent = await choose_intent(text, correlation_id)
+    ctx.logger.info(f"[{correlation_id}] intent {intent.name} via {intent.source}")
+    return await run_intent(ctx, intent, correlation_id, sender)
+
+
+async def run_intent(ctx: Context, intent: Intent, correlation_id: str, sender: str) -> str | Card:
+    # The reply always comes from the actions (B's data), never from model text.
+    if intent.name == "start_readiness_check":
+        return await actions.start_readiness_check(correlation_id)
+    if intent.name == "case_status":
+        return await actions.case_status(case_of(intent), correlation_id)
+    if intent.name == "show_suitable_volunteers":
+        return await actions.show_suitable_providers(ctx, case_of(intent), correlation_id)
+    if intent.name == "test_push":
         asyncio.create_task(_delayed_push(ctx, sender, correlation_id))
         return f"Push test: I will send an unsolicited follow-up in {PUSH_TEST_DELAY_SECONDS} s (ref {correlation_id})."
-    if "provider" in lowered or "offer" in lowered:
-        return await actions.show_suitable_providers(ctx, actions.case_from_text(text), correlation_id)
-    if "start" in lowered and ("check" in lowered or "warning" in lowered):
-        return await actions.start_readiness_check(correlation_id)
-    if "status" in lowered:
-        return await actions.case_status(actions.case_from_text(text), correlation_id)
+    if intent.name == "clarify_resident":
+        return ("Which resident do you mean? Please name them (for example 'Maria' or 'David'). "
+                "I don't guess who a request is about. Nothing was changed.")
+    if intent.name.startswith("unsupported:"):
+        return f"The '{intent.name.split(':', 1)[1]}' action is not available yet in this demo build. Nothing was changed."
     return f"Coordinator online. {HELP_TEXT}"
-
-
-async def route_selection(ctx: Context, selection: dict, correlation_id: str) -> str | Card:
-    action, case_id = selection["action"], selection.get("case_id") or actions.DEFAULT_CASE
-    if action == "case_status":
-        return await actions.case_status(case_id, correlation_id)
-    if action == "show_matches":
-        return await actions.show_suitable_providers(ctx, case_id, correlation_id)
-    return f"The '{action}' action is not available yet in this demo build. Nothing was changed."
 
 
 @chat_proto.on_message(ChatAcknowledgement)
