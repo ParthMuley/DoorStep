@@ -25,3 +25,6 @@ agent_data/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Local test logs
+test-reports/
