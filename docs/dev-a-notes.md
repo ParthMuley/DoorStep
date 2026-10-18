@@ -264,3 +264,20 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
 - Display name `doorstep_coordinator` → **Doorstep** (code). Same seed, so the same address and chat history.
 - Handle **`@doorstep`**, set by Parth on the Agentverse profile page; Agentverse has no handle API.
 - Agentverse's search API confirms `handle: doorstep`. ASI:One's `@` mention suggestions didn't list it yet right after the change (separate index, refreshes later). Until then, mention the agent by address or open an existing chat.
+
+### Three-chat demo on one ASI:One account (2026-10-18, for the submission)
+- **`DEMO_LINK_PER_CHAT=true`** (demo only, default off): identity = ASI:One account + chat (a hash of the envelope session). One account can then link a different role in each chat.
+  - Verified first that ASI:One keeps one stable session per chat.
+  - Replies still go to the account address; the session routes them into the right chat.
+  - B stores the combined identity as the linked "address"; B's sender checks compare it as an opaque string.
+- **New chats:** start them from `https://asi1.ai/ai/<agent address>` (Agentverse "Chat with Agent"). The composer then shows `@doorstep`.
+- **Run on Render with B's full dataset** (`/demo/reset {"dataset":"full"}`):
+  1. Coordinator: alert, 5 organizations asked.
+  2. Maria: Spanish check-in, needs confirmed.
+  3. Sarah: available.
+  4. Coordinator: match, Sarah #1 (Joe rejected: needs not covered, no wheelchair space), approve.
+  5. Sarah: accept → trip card with Render map and Step rows.
+  6. Both confirm pickup.
+  7. Coordinator: arrival.
+  8. Maria: consent → Red Cross (housing) + Insurance Help Desk (insurance) ACCEPTED.
+- **Fixed:** the trip-card lead no longer ends with "..".

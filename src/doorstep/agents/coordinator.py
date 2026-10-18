@@ -43,6 +43,7 @@ from doorstep.integrations.asi_one_client import Intent, IntentClient, intent_en
 from doorstep.integrations.fetch_adapter import new_correlation_id
 from doorstep.integrations.fetch_messages import AlertNotification, ClosureNotification
 from doorstep.integrations.map_image import image_test_card
+from doorstep.integrations.outbox import CHAT_SEP
 from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
 
 load_dotenv()
@@ -110,11 +111,13 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         sender,
         ChatAcknowledgement(timestamp=datetime.now(timezone.utc), acknowledged_msg_id=msg.msg_id),
     )
+    sender = identity(ctx, sender)  # demo: account + chat when DEMO_LINK_PER_CHAT is on
     journey.outbox.remember(ctx, sender)  # pushes to this person go out on this chat's session
     text = extract_text(msg)
     correlation_id = new_correlation_id()
     # Never log resident free text; length is enough to debug delivery.
-    ctx.logger.info(f"[{correlation_id}] chat message from {sender[:16]}... ({len(text)} chars)")
+    ctx.logger.info(f"[{correlation_id}] chat message from {sender[:16]}... ({len(text)} chars, "
+                    f"chat {chat_tag(ctx)})")
 
     try:
         reply = await route(ctx, text, correlation_id, sender)
@@ -202,6 +205,22 @@ RESIDENT_HELP = ("You're linked as a resident (synthetic). Use the buttons on yo
                  "'confirm pickup' once you are in the vehicle, or 'status'.")
 VOLUNTEER_HELP = ("You're linked as a volunteer (synthetic). Use the buttons on your cards, or reply 'yes'/'no' "
                   "to an availability request, 'accept'/'decline' for an assignment, 'confirm pickup', or 'status'.")
+
+
+def chat_tag(ctx: Context) -> str:
+    """Short, non-reversible tag of the ASI:One chat (envelope session) for logs and demo identities."""
+    import hashlib
+    return hashlib.sha256(str(ctx.session).encode()).hexdigest()[:8]
+
+
+def identity(ctx: Context, address: str) -> str:
+    """Who is talking. Normally the ASI:One account address (one account = one person, plan
+    §0.5.1). DEMO_LINK_PER_CHAT=true makes it account + chat, so ONE account can link a
+    different role in each chat for a recorded demo; replies still go to the account address
+    and the session routes them to the right chat. Never use it with real people."""
+    if os.getenv("DEMO_LINK_PER_CHAT", "false").lower() != "true":
+        return address
+    return f"{address}{CHAT_SEP}{chat_tag(ctx)}"
 
 
 async def link_account(ctx: Context, sender: str, code: str, corr: str):

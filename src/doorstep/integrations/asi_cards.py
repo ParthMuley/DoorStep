@@ -348,7 +348,8 @@ def trip_card(*, case_id: str, name: str, progress: list[tuple[str, bool]], rows
         payload["hero_image"] = image_url
     # The card carries everything; the text is a one-line lead. Repeating every row above
     # the card is noise for the person (the plain-text fallback is rarely needed).
-    return Card("detail", payload, intro.rstrip(":").strip() + ".")
+    lead = intro.rstrip(":").strip()
+    return Card("detail", payload, lead if lead.endswith((".", "!", "?")) else lead + ".")
 
 
 def info_card(title: str, rows: list[tuple[str, Any]], narration_intro: str, source: str,

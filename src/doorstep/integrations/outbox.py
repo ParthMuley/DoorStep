@@ -28,6 +28,14 @@ from doorstep.integrations.asi_cards import DEMO_PREFIX, Card, text_message
 Part = Card | str
 
 
+CHAT_SEP = "#"  # DEMO_LINK_PER_CHAT identities are "<account address>#<chat tag>"
+
+
+def destination(identity: str) -> str:
+    """The ASI:One account address to send to (a per-chat demo identity carries a chat tag)."""
+    return identity.split(CHAT_SEP, 1)[0]
+
+
 def _interactive(part: Part) -> bool:
     return isinstance(part, Card) and part.interactive
 
@@ -73,7 +81,7 @@ class Outbox:
         ctx = self._ctx_for(ctx, address)
         if self.delay() <= 0:  # legacy: one message per part
             for part in parts:
-                await ctx.send(address, part.to_message() if isinstance(part, Card) else text_message(part))
+                await ctx.send(destination(address), part.to_message() if isinstance(part, Card) else text_message(part))
             return
         loop = asyncio.get_running_loop()
         self._buf.setdefault(address, []).extend(parts)
@@ -98,4 +106,4 @@ class Outbox:
         ctx = self._flush_ctx.pop(address)
         if parts:
             ctx.logger.info(f"outbox: 1 message ({len(parts)} parts) to {address[:16]}...")
-            await ctx.send(address, compose(parts))
+            await ctx.send(destination(address), compose(parts))

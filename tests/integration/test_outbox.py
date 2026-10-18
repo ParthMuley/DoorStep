@@ -85,3 +85,24 @@ async def test_pushes_go_out_on_the_persons_chat_session(monkeypatch):
     monkeypatch.setenv("PUSH_COALESCE_SECONDS", "0")
     await outbox.add(alert_ctx, "rosa", "legacy")
     assert sorted(sent) == [("alert", "stranger"), ("chat", "rosa"), ("chat", "rosa")]
+
+
+async def test_per_chat_demo_identity_is_delivered_to_the_account(monkeypatch):
+    """DEMO_LINK_PER_CHAT: identity = account + chat; messages still go to the account address."""
+    from doorstep.agents.coordinator import identity
+
+    class Ctx(FakeCtx):
+        session = "chat-session-1"
+
+    sent: list = []
+    ctx = Ctx("chat", sent)
+    assert identity(ctx, "agent1qacct") == "agent1qacct"  # off by default: one account = one person
+    monkeypatch.setenv("DEMO_LINK_PER_CHAT", "true")
+    who = identity(ctx, "agent1qacct")
+    assert who.startswith("agent1qacct#") and len(who) == len("agent1qacct#") + 8
+    other = Ctx("chat2", sent)
+    other.session = "chat-session-2"
+    assert identity(other, "agent1qacct") != who  # another chat = another identity
+    monkeypatch.setenv("PUSH_COALESCE_SECONDS", "0")
+    await Outbox().add(ctx, who, "hello")
+    assert sent == [("chat", "agent1qacct")]
