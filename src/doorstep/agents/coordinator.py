@@ -42,6 +42,7 @@ from doorstep.integrations.asi_cards import (
 from doorstep.integrations.asi_one_client import Intent, IntentClient, intent_enabled, keyword_intent
 from doorstep.integrations.fetch_adapter import new_correlation_id
 from doorstep.integrations.fetch_messages import AlertNotification, ClosureNotification
+from doorstep.integrations.map_image import image_test_card
 from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
 
 load_dotenv()
@@ -224,7 +225,10 @@ async def route(ctx: Context, text: str, correlation_id: str, sender: str = ""):
     code = link_code_from_text(text) or (selection.get("code") if selection.get("action") == "link" else None)
     if code:
         return await link_account(ctx, sender, str(code).strip().upper(), correlation_id)
-    if MENTION.sub("", text).strip().lower() == "unlink":  # demo control: start over in this chat
+    plain = MENTION.sub("", text).strip().lower()
+    if plain.startswith("test image"):  # dev probe: which hero_image URL kinds ASI:One renders
+        return image_test_card(plain.removeprefix("test image").strip())
+    if plain == "unlink":  # demo control: start over in this chat
         journey.subscribers.discard(sender)
         removed = journey.people.remove(ctx, sender)
         return ("This chat is no longer linked (demo). " if removed else "This chat wasn't linked. ") + (

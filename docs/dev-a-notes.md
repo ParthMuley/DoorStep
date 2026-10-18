@@ -200,3 +200,22 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   - Our push then followed that assistant's session and never reached the chat.
   - Demo rule: always check "To: doorstep_coordinator", and turn off the assistant's auto-response in chat settings.
   - Code follow-up: only remember sessions from direct chat messages.
+
+### Route map image: HERE Map Image v3 + what ASI:One renders (2026-10-18)
+- **HERE (live, 4 free-tier calls in total):** `integrations/map_image.py` builds compact overlays and fetches a PNG server-side.
+  - Overlays: the route as a flexible-polyline `line` (blue), the ORDER zone and official closures as translucent `polygon`s, and labelled `point`s for Start, Pickup and Shelter.
+  - About 80 KB at 640x400. Auto-fits with `padding=48`.
+  - Gotchas:
+    - polygon rings must be closed;
+    - polygons accept only `color` (with an alpha channel); `outline-*` returns HTTP 400 E622002;
+    - pass `#` raw, because the HTTP client encodes it.
+- **ASI:One `hero_image` (live probes):**
+  - Public `https://` works; the viewer's browser loads it directly.
+  - A `data:` URI rejects the whole card.
+  - `http://localhost` is blocked by asi1.ai's CSP (`img-src 'self' data: blob: https:`).
+  - Also: cards with no buttons don't render on their own; give info cards a Refresh button.
+- **Decision needed:** where the PNG lives at a public https URL. Options:
+  - B's backend deployed publicly with `GET /maps/{unguessable-token}.png`;
+  - an ngrok tunnel serving only a maps folder (demo);
+  - a public bucket or CDN.
+  - The URL must be unguessable: the map shows the pickup point.
