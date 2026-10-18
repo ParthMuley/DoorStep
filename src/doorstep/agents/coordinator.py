@@ -300,7 +300,7 @@ async def resident_route(ctx: Context, link: Link, text: str, sel: dict, corr: s
         return await journey.recovery(ctx, link.case_id, False, corr)
     if action == "case_status" or "status" in word:
         if journey.case(link.case_id).steps["PROVIDER_ACCEPTED"]:
-            return journey.trip_card(link.case_id, link, "Your trip so far:")
+            return journey.trip_card(link.case_id, link, "Your trip so far")
         return await actions.case_status(link.case_id, corr)
     return RESIDENT_HELP
 
@@ -333,7 +333,7 @@ async def volunteer_route(ctx: Context, link: Link, text: str, sel: dict, corr: 
         return await journey.confirm_pickup(ctx, case_id, corr, by=link)
     if action == "case_status" or "status" in word:
         case_id = _volunteer_case(link, accepted=True)
-        return (journey.trip_card(case_id, link, "Your assignment so far:") if case_id
+        return (journey.trip_card(case_id, link, "Your assignment so far") if case_id
                 else "You have no accepted assignment right now.")
     return VOLUNTEER_HELP
 

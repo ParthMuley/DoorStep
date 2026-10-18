@@ -331,13 +331,14 @@ def pickup_confirm_card(*, case_id: str, who: str) -> Card:
 
 
 def trip_card(*, case_id: str, name: str, progress: list[tuple[str, bool]], rows: list[tuple[str, Any]],
-              next_step: str, cta: tuple[str, dict[str, Any]] | None, intro: str, extra_text: str = "",
-              image_url: str | None = None) -> Card:
+              next_step: str, cta: tuple[str, dict[str, Any]] | None, intro: str,
+              steps: list[str] | None = None, image_url: str | None = None) -> Card:
     """A resident's or volunteer's whole trip in one card. ASI:One folds every message that
     arrives before the person's next reply into one bubble and renders only the last card,
     so each update is a full snapshot (progress, next step, the one button that applies)."""
     line = " · ".join(f"{'✓' if done else '○'} {label}" for label, done in progress)
     summary = [_row("Progress", line), *(_row(k, v) for k, v in rows), _row("Next", next_step),
+               *(_row(f"Step {n}", d) for n, d in enumerate(steps or [], 1)),
                _row("Note", "This is a simulation, not an emergency service. In a real emergency call 911."),
                _footer(None, "Doorstep journey")]
     button = cta or ("Refresh", {"action": "case_status", "case_id": case_id})
@@ -345,8 +346,9 @@ def trip_card(*, case_id: str, name: str, progress: list[tuple[str, bool]], rows
                "ctas": [{"label": button[0], "selection": button[1], "primary": True}]}
     if image_url and image_url.startswith("https://"):  # ASI:One rejects the card for data:/http images
         payload["hero_image"] = image_url
-    text = f"{intro}\n{_rows_text(summary)}" + (f"\n{extra_text}" if extra_text else "")
-    return Card("detail", payload, text)
+    # The card carries everything; the text is a one-line lead. Repeating every row above
+    # the card is noise for the person (the plain-text fallback is rarely needed).
+    return Card("detail", payload, intro.rstrip(":").strip() + ".")
 
 
 def info_card(title: str, rows: list[tuple[str, Any]], narration_intro: str, source: str,

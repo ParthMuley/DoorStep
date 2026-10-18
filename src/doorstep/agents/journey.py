@@ -269,7 +269,7 @@ class Journey:
             await self.push(ctx, part)
         if resident:
             await self.send_to(ctx, resident.address, self.trip_card(case_id, resident, "Help is on the way (simulated)."))
-        return self.trip_card(case_id, link, "You accepted. Your illustrative route:")
+        return self.trip_card(case_id, link, "You accepted. Your illustrative route is on the card")
 
 
     @staticmethod
@@ -547,7 +547,7 @@ class Journey:
         shelter = j.help.get("shelter") or "the agreed shelter"
         progress = [("Volunteer accepted", accepted), ("Picked up", picked), ("Arrived at shelter", arrived)]
         rows: list[tuple[str, Any]] = []
-        directions = ""
+        directions: list[str] = []
         if mine:
             r = j.route
             if r is not None and r.status == "ILLUSTRATIVE_ONLY":
@@ -555,7 +555,7 @@ class Journey:
                                    f"({r.status}, not for live evacuation)"),
                          ("Avoids", ", ".join(f"{a['kind']} {a['id']}" for a in r.avoided) or "no active blocks")]
                 rows += [("Caution", f"{c}: unverified report on the path") for c in r.cautions_on_path]
-                directions = "\n".join(f"Step {n}: {d}" for n, d in enumerate(r.directions, 1))
+                directions = list(r.directions)
             elif r is not None:
                 rows.append(("Route", f"{r.status}: no route shown; ask the coordinator"))
             rows += [("Resident", NAMES.get(case_id, case_id)), ("Shelter", shelter)]
@@ -583,7 +583,7 @@ class Journey:
         if image and not image.startswith("https://"):
             rows.append(("Map", "rendered; shown once the backend has a public https address"))
         return trip_card(case_id=case_id, name=NAMES.get(case_id, case_id), progress=progress, rows=rows,
-                         next_step=nxt, cta=cta, intro=intro, extra_text=directions, image_url=image)
+                         next_step=nxt, cta=cta, intro=intro, steps=directions, image_url=image)
 
     async def case_map(self, case_id: str, corr: str, step_response: dict[str, Any]) -> dict[str, str]:
         """Status color/label always from B: the step response if it has one, else the case record."""

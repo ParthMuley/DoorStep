@@ -41,6 +41,11 @@ def text(msg: ChatMessage) -> str:
     return msg.content[0].text
 
 
+def full(msg: ChatMessage) -> str:
+    """Text plus the card's contents (trip cards keep their rows in the card, not the text)."""
+    return text(msg) + json.dumps(card(msg) or {}, ensure_ascii=False)
+
+
 def title(msg: ChatMessage) -> str:
     return (card(msg) or {}).get("title", "")
 
@@ -161,8 +166,8 @@ async def test_three_linked_people_run_maria_end_to_end(monkeypatch):
             seen["waiting"] = await inbox["resident"].wait(lambda m: "Waiting for the volunteer" in text(m))
             seen["nudged"] = await inbox["volunteer"].wait(lambda m: "The other person confirmed pickup" in text(m))
             await say("volunteer", sel(v_pickup))
-            seen["picked"] = await inbox["volunteer"].wait(lambda m: "✓ Picked up" in text(m))
-            seen["picked_resident"] = await inbox["resident"].wait(lambda m: "✓ Picked up" in text(m))
+            seen["picked"] = await inbox["volunteer"].wait(lambda m: "✓ Picked up" in full(m))
+            seen["picked_resident"] = await inbox["resident"].wait(lambda m: "✓ Picked up" in full(m))
 
             await say("coord", "Confirm arrival for Maria")
             seen["arrival"] = await inbox["coord"].wait(lambda m: "Asked Maria (synthetic) in their own chat" in text(m))
@@ -186,9 +191,12 @@ async def test_three_linked_people_run_maria_end_to_end(monkeypatch):
     assert "CODE_SPENT" in text(seen["spent"])  # demo codes work once
     assert "Aviso SIMULADO" in text(seen["checkin"])  # Maria's profile language (es), read from her case at alert time
     assert "SYNTHETIC: Zone 3 Sector B meeting point" not in text(seen["assignment"])  # pickup point private
-    assert "ILLUSTRATIVE_ONLY" in text(seen["route"]) and len(here.calls) == 1
+    assert "ILLUSTRATIVE_ONLY" in full(seen["route"]) and len(here.calls) == 1
     assert "both the volunteer and the resident in their own chats" in text(seen["picked"])
-    assert "Step 1:" in text(seen["route"]) and card(seen["route"])["ctas"][0]["label"] == "Confirm pickup"
-    assert "volunteer_sarah" in text(seen["help"]) and "Step 1:" not in text(seen["help"])  # resident: no route
+    route_rows = {r["label"]: r["value"] for r in card(seen["route"])["summary_rows"]}
+    assert "Step 1" in route_rows and card(seen["route"])["ctas"][0]["label"] == "Confirm pickup"
+    assert len(text(seen["route"]).splitlines()) == 1  # one-line lead; the rows live in the card
+    help_rows = {r["label"]: r["value"] for r in card(seen["help"])["summary_rows"]}
+    assert "volunteer_sarah" in help_rows["Volunteer"] and "Step 1" not in help_rows  # resident: no route
     assert card(seen["picked"])["ctas"][0]["label"] == "Refresh"  # nothing left to confirm
     assert "Housing secured: no" in text(seen["referrals"])
