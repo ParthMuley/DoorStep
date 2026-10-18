@@ -244,7 +244,7 @@ def recovery_consent_card(*, case_id: str, display_name: str, help_types: list[s
             _row("Note", "A referral is a request, not secured housing or a filed claim."),
             _footer(None, "Doorstep consent record")]
     payload = {"title": f"{SIM_PREFIX} · Further help · {display_name}", "summary_rows": rows,
-               "approve_cta": {"label": "Yes, share and request help (resident consents)",
+               "approve_cta": {"label": "Yes, request help",
                                "selection": {"action": "recovery_consent", "case_id": case_id}, "primary": True},
                "reject_cta": {"label": "No thanks",
                               "selection": {"action": "recovery_decline", "case_id": case_id}}}

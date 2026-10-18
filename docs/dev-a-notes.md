@@ -245,3 +245,17 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
 - **Drive time:** fell back to distance ranking because Render has no `POST /routes/candidates` yet (`NOT_FOUND`). Works locally against the stand-in. **Needs B (§000.11).**
 - **Fix:** B expires a map when the assignment ends, so the trip card drops the image once the trip has arrived. Earlier cards in the chat will lose their image after the browser cache (1 h); that's expected.
 - **`.env` note:** `DEMO_AUTH_TOKEN` appears twice (the old default plus Render's; dotenv uses the later one). The Render lines use `KEY = value`; dotenv accepts that, but shell scripts that source `.env` won't.
+
+### Resident's view, live on Render (2026-10-18, for the mentor demo)
+- **The run:** the browser account linked as Maria (`MARIA-4821`, after `/demo/reset` on Render). The coordinator ran in the background; the volunteer was simulated (Sarah).
+- **What Maria saw:**
+  1. Spanish check-in.
+  2. "Confirm your needs" read back in Spanish.
+  3. "Nothing is arranged until a volunteer accepts."
+  4. Trip card with volunteer, ETA estimate and shelter.
+  5. Two-party pickup ("waiting for the other person").
+  6. Arrival, then a consent card for further help.
+  7. Referrals ACCEPTED, with "Housing secured: no".
+- **Fixed:**
+  - When the volunteer is simulated (not on ASI:One), a linked resident now gets the trip card on approval too (before, they had to ask `status`).
+  - Consent button shortened to "Yes, request help" (the long label was cut off).

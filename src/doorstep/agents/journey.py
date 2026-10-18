@@ -352,6 +352,9 @@ class Journey:
         outcome = await self._decide(ctx, case_id, corr, p, None)
         if not outcome["accepted"]:
             return outcome["coordinator"][0] if len(outcome["coordinator"]) == 1 else outcome["coordinator"]
+        resident = self.people.resident_for_case(case_id)
+        if resident:  # a linked resident hears it in their own chat even when the volunteer is simulated
+            await self.send_to(ctx, resident.address, self.trip_card(case_id, resident, "Help is on the way (simulated)."))
         return [outcome["help"], outcome["route"]]
 
     async def _decide(self, ctx: Context, case_id: str, corr: str, p: dict[str, Any],
