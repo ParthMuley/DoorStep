@@ -1,6 +1,6 @@
 # DOORSTEP V2 — Two-Person Plan (Fetch.ai track) — revision 3
 
-*Shared plan for Developer A and Developer B. Both Claude Code sessions read this file. Change only by PR, agreed by both. Revision 2 (2026-10-17) re-aligned the plan with the team's original idea and switched to MongoDB. **Revision 3 (2026-10-17, proposed by A, pending B's agreement):**
+*Shared plan for Developer A and Developer B. Both Claude Code sessions read this file. Change only by PR, agreed by both. Revision 2 (2026-10-17) re-aligned the plan with the team's original idea and switched to MongoDB. **Revision 3 (2026-10-17, proposed by A, agreed by B):**
 - no agent per organization: one Volunteer Network agent serves all partner orgs;
 - the partner database becomes location-first (`region → orgs → volunteers`), so finding the closest help to an evacuation zone is one geo query.
 
@@ -71,7 +71,7 @@ See §0.*
 | | Done | Changes with revision 2 |
 |---|---|---|
 | A | Done on `feat/fetch-agents` @ 4f20ddf:<br>• the Doorstep agent drives the full V2 journey live through Agentverse (alert push, outreach, match, approve, accept, pickup, arrival, recovery, David escalation), with cards and ASI:One tool calling<br>• Calamity, Matching, Escalation and Post-Calamity agents built<br>• per-org agents built, then **replaced in rev 3** by one Volunteer Network agent | Still to do: the Volunteer Network agent, the News and Route agents, and the switch to the v2.1 endpoints |
-| B | v1.0 API on SQLite: consent, matching, safety gate, evidence states, events, idempotency, simulator, recovery, escalation, Maria/David, 85 tests | Port storage to **MongoDB** (2 DBs). Needs codes. Org/volunteer documents. Volunteer outreach. Alerts + polygons. Matching against org DB volunteers. Closures, routes, card data. Contract v2.0 revision |
+| B | Done on `feat/backend-geodata` @ 27e6295:<br>• MongoDB (2 DBs, mongomock tests, real-server test)<br>• B2 registration + needs codes<br>• B3 Cal OES-shaped feed, `/alerts/ingest`, Shapely geofencing, STALE/UNKNOWN, outreach list, volunteer outreach<br>• B4 `/matches/propose`, reservation, accept/decline, v2 pickup/shelter check-in, escalate + ack, Scenarios A/B/C v2 (158 unit tests)<br>• contract v2.1 written for rev 3 | Still to do: move partners to location-first `regions` + the v2.1 network endpoints (replacing the per-org ones), resident pickup SMS, `PUT /agents/{role}`; then B5 post-calamity, B6 closures + routes, B7 card data |
 | Open issue | 4 of A's agent tests time out on B's machine | check together first |
 
 ## 4. Agents (all uAgents on Agentverse, owned by A)
