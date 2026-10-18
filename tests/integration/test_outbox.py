@@ -2,6 +2,7 @@
 last card, so the outbox combines a burst into one message carrying the actionable card."""
 
 import asyncio
+import json
 
 from uagents import Context
 from uagents_core.contrib.protocols.chat import ChatMessage, MetadataContent
@@ -25,6 +26,9 @@ def test_compose_keeps_all_text_and_the_last_interactive_card():
     assert body.startswith("DOORSTEP DEMO") and body.count("DOORSTEP DEMO") == 1
     assert "Plain reply." in body and "Alert text." in body and "Route text." in body
     assert kind(msg) == "review"  # the consent card (has buttons) wins over the later info card
+    rows = json.loads(msg.content[1].metadata["card_payload"])["summary_rows"]
+    assert rows[-2] == {"label": "Also in this update", "value": "Alert detected; Route (see the text above)"}
+    assert rows[-1]["label"] == "Data"
     assert kind(compose(["only text"])) is None
 
 

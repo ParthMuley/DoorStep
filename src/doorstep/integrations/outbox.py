@@ -16,6 +16,7 @@ latest message (remember()).
 
 import asyncio
 import os
+from dataclasses import replace
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -39,6 +40,11 @@ def compose(parts: list[Part]) -> ChatMessage:
     body = f"{DEMO_PREFIX} " + "\n\n".join(t.strip() for t in texts if t and t.strip())
     content: list = [TextContent(type="text", text=body)]
     if primary is not None:
+        dropped = [str(c.payload.get("title", "")).split(" · ", 1)[-1] for c in cards if c is not primary]
+        if dropped and "summary_rows" in primary.payload:  # the card that renders names what the text holds
+            rows = primary.payload["summary_rows"]
+            primary = replace(primary, payload={**primary.payload, "summary_rows": rows[:-1] + [
+                {"label": "Also in this update", "value": "; ".join(dropped) + " (see the text above)"}, rows[-1]]})
         content.append(next(c for c in primary.to_message().content if isinstance(c, MetadataContent)))
     return ChatMessage(timestamp=datetime.now(timezone.utc), msg_id=uuid4(), content=content)
 

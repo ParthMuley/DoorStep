@@ -188,3 +188,15 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
 - **Fixed after the run:** volunteers and residents now get a "Trip update" card with their own next step at pickup and arrival, not the coordinator's case card with its coordinator buttons. Also fixed the UNLINK reply wording: ASI:One swallowed "<code>" as an HTML tag.
 - **ASI:One behaviour:** every agent message that arrives before the person's next message is folded into one bubble (newest text first, last card only), even minutes apart. Keep each person's updates few and self-contained.
 - **Tests:** `tests/integration/test_roster_import.py`; 248 pass.
+
+### "Your trip" snapshot cards (2026-10-18)
+- **Problem:** ASI:One folds every agent message that arrives before the person's next reply into one bubble and shows only the last card.
+- **Fix:** residents and volunteers now get one `trip_card` that is a full snapshot every time. It shows progress (✓/○ accepted · picked up · arrived), who is coming and the ETA (resident) or the route summary (volunteer), the next step, and the one button that applies. Turn-by-turn steps are in the text.
+- **Outbox:** when a burst drops cards, the card that renders gets an "Also in this update" row naming them.
+- **Verified live:** accept → trip card with "Confirm pickup"; pickup and arrival folded into one bubble whose card was the complete final state (✓✓✓, "assignment complete", Refresh).
+- **ASI:One's built-in assistant (Jemma) can intercept:**
+  - After a page reload the chat's "To" switched to the built-in assistant.
+  - It called our agent itself and answered the user with **stale status from old chat history**.
+  - Our push then followed that assistant's session and never reached the chat.
+  - Demo rule: always check "To: doorstep_coordinator", and turn off the assistant's auto-response in chat settings.
+  - Code follow-up: only remember sessions from direct chat messages.

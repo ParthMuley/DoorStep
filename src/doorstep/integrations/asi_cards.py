@@ -330,6 +330,22 @@ def pickup_confirm_card(*, case_id: str, who: str) -> Card:
     return Card("detail", payload, f"{text} Reply 'confirm pickup' when it happens.")
 
 
+def trip_card(*, case_id: str, name: str, progress: list[tuple[str, bool]], rows: list[tuple[str, Any]],
+              next_step: str, cta: tuple[str, dict[str, Any]] | None, intro: str, extra_text: str = "") -> Card:
+    """A resident's or volunteer's whole trip in one card. ASI:One folds every message that
+    arrives before the person's next reply into one bubble and renders only the last card,
+    so each update is a full snapshot (progress, next step, the one button that applies)."""
+    line = " · ".join(f"{'✓' if done else '○'} {label}" for label, done in progress)
+    summary = [_row("Progress", line), *(_row(k, v) for k, v in rows), _row("Next", next_step),
+               _row("Note", "This is a simulation, not an emergency service. In a real emergency call 911."),
+               _footer(None, "Doorstep journey")]
+    button = cta or ("Refresh", {"action": "case_status", "case_id": case_id})
+    payload = {"title": f"{SIM_PREFIX} · Your trip · {name}", "summary_rows": summary,
+               "ctas": [{"label": button[0], "selection": button[1], "primary": True}]}
+    text = f"{intro}\n{_rows_text(summary)}" + (f"\n{extra_text}" if extra_text else "")
+    return Card("detail", payload, text)
+
+
 def info_card(title: str, rows: list[tuple[str, Any]], narration_intro: str, source: str,
               data_as_of: str | None = None) -> Card:
     """Generic read-only card (alerts, outreach, road conditions, data health)."""

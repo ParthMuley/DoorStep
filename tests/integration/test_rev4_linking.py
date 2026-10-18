@@ -152,17 +152,17 @@ async def test_three_linked_people_run_maria_end_to_end(monkeypatch):
             seen["assignment"] = await inbox["volunteer"].wait(lambda m: "New assignment" in title(m))
 
             await say("volunteer", sel(seen["assignment"]))  # Accept
-            seen["route"] = await inbox["volunteer"].wait(lambda m: "Route for volunteer_sarah" in title(m))
-            v_pickup = await inbox["volunteer"].wait(lambda m: "Confirm pickup" in title(m))
-            seen["help"] = await inbox["resident"].wait(lambda m: "Help on the way" in title(m))
-            r_pickup = await inbox["resident"].wait(lambda m: "Confirm pickup" in title(m))
+            # One snapshot card per person (ASI:One renders only the last card of a turn).
+            seen["route"] = v_pickup = await inbox["volunteer"].wait(lambda m: "Your trip" in title(m))
+            seen["help"] = r_pickup = await inbox["resident"].wait(lambda m: "Your trip" in title(m))
             seen["coord_help"] = await inbox["coord"].wait(lambda m: "Help on the way" in title(m))
 
             await say("resident", sel(r_pickup))
             seen["waiting"] = await inbox["resident"].wait(lambda m: "Waiting for the volunteer" in text(m))
+            seen["nudged"] = await inbox["volunteer"].wait(lambda m: "The other person confirmed pickup" in text(m))
             await say("volunteer", sel(v_pickup))
-            seen["picked"] = await inbox["volunteer"].wait(lambda m: "PICKUP_CONFIRMED" in text(m))
-            seen["picked_resident"] = await inbox["resident"].wait(lambda m: "PICKUP_CONFIRMED" in text(m))
+            seen["picked"] = await inbox["volunteer"].wait(lambda m: "✓ Picked up" in text(m))
+            seen["picked_resident"] = await inbox["resident"].wait(lambda m: "✓ Picked up" in text(m))
 
             await say("coord", "Confirm arrival for Maria")
             seen["arrival"] = await inbox["coord"].wait(lambda m: "Asked Maria (synthetic) in their own chat" in text(m))
@@ -187,4 +187,7 @@ async def test_three_linked_people_run_maria_end_to_end(monkeypatch):
     assert "SYNTHETIC: Zone 3 Sector B meeting point" not in text(seen["assignment"])  # pickup point private
     assert "ILLUSTRATIVE_ONLY" in text(seen["route"]) and len(here.calls) == 1
     assert "both the volunteer and the resident in their own chats" in text(seen["picked"])
+    assert "Step 1:" in text(seen["route"]) and card(seen["route"])["ctas"][0]["label"] == "Confirm pickup"
+    assert "volunteer_sarah" in text(seen["help"]) and "Step 1:" not in text(seen["help"])  # resident: no route
+    assert card(seen["picked"])["ctas"][0]["label"] == "Refresh"  # nothing left to confirm
     assert "Housing secured: no" in text(seen["referrals"])

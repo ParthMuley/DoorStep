@@ -34,9 +34,9 @@ from doorstep.integrations.asi_cards import (
     info_card,
     match_card,
     needs_confirm_card,
-    pickup_confirm_card,
     recovery_consent_card,
     text_message,
+    trip_card,
 )
 from doorstep.integrations.fetch_messages import (
     AcceptRequest,
@@ -87,6 +87,8 @@ class CaseJourney:
         "REQUESTED": None, "PROVIDER_ACCEPTED": None, "PICKUP_CONFIRMED": None, "ARRIVAL_CONFIRMED": None})
     map: dict[str, str] = field(default_factory=lambda: {"color": "red", "label": "Assistance needed"})
     next_step: str | None = None
+    route: Any = None  # the RouteResponse sent to the volunteer
+    help: dict[str, Any] = field(default_factory=dict)  # volunteer label + ETA + shelter for the trip card
 
 
 class Journey:
@@ -260,9 +262,8 @@ class Journey:
         for part in outcome["coordinator"]:
             await self.push(ctx, part)
         if resident:
-            await self.send_to(ctx, resident.address, outcome["help"], pickup_confirm_card(case_id=case_id,
-                                                                                            who="resident"))
-        return [outcome["route"], pickup_confirm_card(case_id=case_id, who="volunteer")]
+            await self.send_to(ctx, resident.address, self.trip_card(case_id, resident, "Help is on the way (simulated)."))
+        return self.trip_card(case_id, link, "You accepted. Your illustrative route:")
 
 
     @staticmethod
@@ -397,6 +398,9 @@ class Journey:
             idempotency_key=f"{aid}:route:v1"), RouteResponse)
         eta = vol.backend.get("eta") or {}
         eta_minutes = route.eta_pickup_minutes if route and route.status == "ILLUSTRATIVE_ONLY" else eta.get("minutes")
+        j.route = route
+        j.help = {"volunteer": f"{p['volunteer_id']} ({p.get('vehicle_type', '')}, {p['org_id']})",
+                  "eta": eta_minutes, "shelter": f"{p.get('site_id')} ({p.get('shelter_org_id')})"}
         help_card = help_on_the_way_card(
             case_id=case_id, display_name=NAMES.get(case_id, case_id),
             volunteer_label=f"{p['volunteer_id']} ({p.get('vehicle_type', '')}, {p['org_id']})",
@@ -459,6 +463,12 @@ class Journey:
         if waiting:
             await self.push(ctx, f"Pickup for {NAMES.get(case_id, case_id)}: waiting for {' and '.join(waiting)} "
                                  "to confirm in their own chat. Pickup is NOT confirmed yet.")
+            if by is not None and by.role != "COORDINATOR":  # both people see the same snapshot
+                other = resident if by.role == "VOLUNTEER" else volunteer
+                if other is not None:
+                    await self.send_to(ctx, other.address, self.trip_card(case_id, other, "The other person confirmed pickup."))
+                return self.trip_card(case_id, by, f"Recorded. Waiting for {' and '.join(waiting)} to confirm too; "
+                                                   "pickup is not confirmed until both do.")
             return (f"Recorded. Waiting for {' and '.join(waiting)} to confirm too; pickup is not confirmed until "
                     "both do.")
         live = {"volunteer", "resident"} <= got
@@ -480,10 +490,10 @@ class Journey:
         card = self.journey_card(case_id, res.get("resident_status"), note=how)
         for person in (volunteer, resident):
             if person is not None and person is not by:
-                await self.send_to(ctx, person.address, self.person_card(case_id, person, res.get("resident_status"), how))
+                await self.send_to(ctx, person.address, self.trip_card(case_id, person, how))
         if by is not None and by.role != "COORDINATOR":  # the person who confirmed last gets their own card
             await self.push(ctx, card)
-            return self.person_card(case_id, by, res.get("resident_status"), how)
+            return self.trip_card(case_id, by, how)
         return card
 
     async def confirm_arrival(self, ctx: Context, case_id: str, corr: str) -> Reply:
@@ -512,26 +522,54 @@ class Journey:
         volunteer = self.people.volunteer(a["volunteer_id"])
         note = "Arrival confirmed by shelter check-in."
         if volunteer:
-            await self.send_to(ctx, volunteer.address, self.person_card(case_id, volunteer, res.get("resident_status"), note))
+            await self.send_to(ctx, volunteer.address, self.trip_card(case_id, volunteer, note))
         if resident:  # consent is the resident's to give, in their own chat
-            await self.send_to(ctx, resident.address, self.person_card(case_id, resident, res.get("resident_status"), note),
-                               consent)
+            await self.send_to(ctx, resident.address, self.trip_card(case_id, resident, note), consent)
             return [card, f"Asked {resident.display_name} in their own chat whether they want further help."]
         return [card, consent]
 
-    def person_card(self, case_id: str, person: Link, status: str | None, note: str) -> Card:
-        """What a volunteer or resident sees at pickup/arrival: their own next step, never the
-        coordinator's case card (no coordinator buttons, no other people's details)."""
-        shelter = (self.case(case_id).proposal or {}).get("site_id") or "the agreed shelter"
-        nxt = {("VOLUNTEER", "PICKUP_CONFIRMED"): f"Drive to {shelter}. The shelter confirms the arrival.",
-               ("VOLUNTEER", "ARRIVAL_CONFIRMED"): "Your assignment is complete. Thank you for helping (simulated).",
-               ("RESIDENT", "PICKUP_CONFIRMED"): f"You're on the way to {shelter}.",
-               ("RESIDENT", "ARRIVAL_CONFIRMED"): "You've arrived. You can ask for further help below."}
-        who = NAMES.get(case_id, case_id) if person.role == "VOLUNTEER" else "you"
-        rows = [("Status", status or "-"), ("What happened", note),
-                ("Next", nxt.get((person.role, status or ""), "A coordinator will follow up.")),
-                ("Note", "This is a simulation, not an emergency service. In a real emergency call 911.")]
-        return info_card(f"Trip update · {who}", rows, f"Trip update ({status}):", "Doorstep journey")
+    def trip_card(self, case_id: str, person: Link, intro: str) -> Card:
+        """The person's whole trip as one snapshot card: progress, who/route, the next step and
+        the one button that applies now (ASI:One shows only the last card of a turn)."""
+        j, mine = self.case(case_id), person.role == "VOLUNTEER"
+        accepted, picked, arrived = (bool(j.steps[k]) for k in ("PROVIDER_ACCEPTED", "PICKUP_CONFIRMED", "ARRIVAL_CONFIRMED"))
+        i_confirmed = ("volunteer" if mine else "resident") in self.pickup_confirms.get(case_id, set())
+        shelter = j.help.get("shelter") or "the agreed shelter"
+        progress = [("Volunteer accepted", accepted), ("Picked up", picked), ("Arrived at shelter", arrived)]
+        rows: list[tuple[str, Any]] = []
+        directions = ""
+        if mine:
+            r = j.route
+            if r is not None and r.status == "ILLUSTRATIVE_ONLY":
+                rows += [("Route", f"{(r.distance_m or 0) / 1000:.1f} km, about {round((r.duration_s or 0) / 60)} min "
+                                   f"({r.status}, not for live evacuation)"),
+                         ("Avoids", ", ".join(f"{a['kind']} {a['id']}" for a in r.avoided) or "no active blocks")]
+                rows += [("Caution", f"{c}: unverified report on the path") for c in r.cautions_on_path]
+                directions = "\n".join(f"Step {n}: {d}" for n, d in enumerate(r.directions, 1))
+            elif r is not None:
+                rows.append(("Route", f"{r.status}: no route shown; ask the coordinator"))
+            rows += [("Resident", NAMES.get(case_id, case_id)), ("Shelter", shelter)]
+        else:
+            eta = j.help.get("eta")
+            rows += [("Volunteer", j.help.get("volunteer", "-")),
+                     ("Estimated arrival", f"about {eta} min (estimate, not a guarantee)" if eta is not None
+                      else "no estimate"), ("Shelter", shelter)]
+        pickup = ("Confirm pickup", {"action": "confirm_pickup", "case_id": case_id})
+        if arrived:
+            nxt, cta = ("Your assignment is complete. Thank you for helping (simulated)." if mine else
+                        "You've arrived. You can ask for further help."), None
+        elif picked:
+            nxt, cta = (f"Drive to {shelter}; the shelter confirms the arrival." if mine else
+                        f"You're on the way to {shelter}."), None
+        elif accepted and i_confirmed:
+            nxt, cta = "Waiting for the other person to confirm pickup too.", None
+        elif accepted:
+            nxt, cta = ("Confirm only once the resident is in your vehicle." if mine else
+                        "Confirm only once you are in the volunteer's vehicle."), pickup
+        else:
+            nxt, cta = "A coordinator is arranging help; nothing is confirmed yet.", None
+        return trip_card(case_id=case_id, name=NAMES.get(case_id, case_id), progress=progress, rows=rows,
+                         next_step=nxt, cta=cta, intro=intro, extra_text=directions)
 
     async def case_map(self, case_id: str, corr: str, step_response: dict[str, Any]) -> dict[str, str]:
         """Status color/label always from B: the step response if it has one, else the case record."""
