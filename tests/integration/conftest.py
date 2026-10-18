@@ -53,6 +53,7 @@ def offline_agents(monkeypatch):
         monkeypatch.setenv(name, "")
     monkeypatch.setenv("ROUTE_MAP_IMAGES", "false")  # map rendering is tested on its own (test_route.py)
     monkeypatch.setenv("DRIVE_TIME_RANKING", "false")  # tested on its own (test_drive_time.py)
+    monkeypatch.setenv("DEMO_LINK_PER_CHAT", "false")  # demo-only switch; tested on its own (test_outbox.py)
 
 
 def make_agent(name: str) -> Agent:
