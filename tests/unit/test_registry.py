@@ -46,14 +46,20 @@ def test_needs_codes_validated_and_normalized():
 def test_seed_matches_contract(svc):
     maria = svc.store.get_resident_profile("resident_001")
     assert maria.needs == [1, 2, 4, 6] and maria.pet_count == 1 and maria.language == "es"
-    orgs = {o.org_id: o for o in svc.store.list_organizations()}
-    assert set(orgs) == {"eastside_rides_demo", "neighbor_sedans_demo", "red_cross_demo", "unlisted_vans_demo",
-                         "flood_only_demo", "civic_shelter_demo", "recovery_housing_demo"}
-    assert orgs["unlisted_vans_demo"].approved is False
-    assert orgs["flood_only_demo"].calamity_types == ["FLOOD"]
-    assert [v.volunteer_id for v in orgs[ORG].volunteers] == ["volunteer_sarah"]
-    assert orgs[ORG].volunteers[0].needs_they_can_cater == [1, 2, 4, 7]
-    assert svc.db.orgs["organizations"].count_documents({}) == 7
+    p = svc.store.partners
+    assert {o.org_id for o in p.list_orgs()} == {"eastside_rides_demo", "neighbor_sedans_demo", "red_cross_demo",
+                                                 "unlisted_vans_demo", "flood_only_demo", "civic_shelter_demo",
+                                                 "recovery_housing_demo"}
+    assert [r.region_id for r in p.list_regions()] == ["la_county:east_valley", "la_county:south_valley",
+                                                       "la_county:westside", "sf:mission"]
+    # Red Cross is present in four places, each with only its local people/sites.
+    assert [r.region_id for r in p.regions_of_org("red_cross_demo")] == [
+        "la_county:east_valley", "la_county:south_valley", "la_county:westside", "sf:mission"]
+    region, entry, sarah = p.locate_volunteer("volunteer_sarah")
+    assert region.region_id == "la_county:east_valley" and entry.org_id == "eastside_rides_demo"
+    assert sarah.needs_they_can_cater == [1, 2, 4, 7]
+    assert p.locate_volunteer("volunteer_sam")[0].region_id == "sf:mission"
+    assert svc.db.partners["regions"].count_documents({}) == 4
     assert svc.db.users["residents"].count_documents({}) == 2
 
 
@@ -108,82 +114,116 @@ def test_duplicate_resident_id_conflicts(client):
     assert r.status_code == 409 and r.json()["error"] == "ALREADY_REGISTERED"
 
 
-# ------------------------------------------------------------ organizations
-def test_register_organization_resets_availability(client):
-    body = new_org()
-    body["volunteers"][0]["availability"] = {"alert_id": "alert_x", "state": "AVAILABLE"}
-    body["volunteers"][0]["reserved_case_id"] = "case_x"
-    r = client.post("/organizations", json={"organization": body})
-    assert r.status_code == 201 and r.json()["volunteers"] == ["volunteer_kim"]
-    kim = client.app.state.service.store.get_organization("foothill_vans_demo").volunteers[0]
-    assert kim.availability is None and kim.reserved_case_id is None
-    assert client.post("/organizations", json={"organization": new_org()}).status_code == 409
+# ------------------------------------------------------------ organizations + regions (v2.1)
+EAST = "la_county:east_valley"
 
 
-def test_duplicate_volunteer_ids_rejected(client):
-    body = new_org()
-    body["volunteers"].append(dict(body["volunteers"][0]))
-    assert client.post("/organizations", json={"organization": body}).status_code == 422
+def canonical(org_id="foothill_vans_demo", **overrides):
+    body = {"org_id": org_id, "name": "Foothill Access Vans (fictional)", "calamity_types": ["WILDFIRE"],
+            "services": ["TRANSPORT"], "approved": True, "service_radius_km": 20}
+    body.update(overrides)
+    return body
+
+
+def kim(**overrides):
+    body = {"volunteer_id": "volunteer_kim", "name": "Kim (synthetic)", "phone": "sim_phone_kim",
+            "location": {"type": "Point", "coordinates": [-118.100, 34.100]}, "vehicle_type": "WHEELCHAIR_VAN",
+            "vehicle_seats": 2, "wheelchair_spaces": 1, "pet_capacity": 1, "needs_they_can_cater": [1, 2, 4],
+            "approved": True}
+    body.update(overrides)
+    return body
+
+
+def test_canonical_org_create_and_update_propagates_to_regions(client):
+    r = client.post("/organizations", json={"organization": canonical()})
+    assert r.status_code == 201 and r.json()["region_ids"] == []
+    # Revoking Red Cross approval updates its copy in every region in the same request.
+    upd = client.post("/organizations", json={"organization": canonical(
+        "red_cross_demo", name="Red Cross (fictional demo chapter)", approved=False, service_radius_km=40,
+        calamity_types=["WILDFIRE", "FLOOD", "EARTHQUAKE"], services=["TRANSPORT", "SHELTER"])})
+    assert upd.status_code == 200 and len(upd.json()["region_ids"]) == 4
+    p = client.app.state.service.store.partners
+    assert all(not e.approved for r in p.regions_of_org("red_cross_demo") for e in r.orgs if e.org_id == "red_cross_demo")
+
+
+def test_volunteer_registered_where_they_are(client):
+    client.post("/organizations", json={"organization": canonical()})
+    ok = client.post(f"/regions/{EAST}/orgs/foothill_vans_demo/volunteers", json={"volunteer": kim()})
+    assert ok.status_code == 201 and ok.json()["region_id"] == EAST
+    p = client.app.state.service.store.partners
+    region, entry, v = p.locate_volunteer("volunteer_kim")
+    assert entry.org_id == "foothill_vans_demo" and entry.approved and v.availability is None
+    # Same id again (any region) -> conflict.
+    again = client.post(f"/regions/{EAST}/orgs/foothill_vans_demo/volunteers", json={"volunteer": kim()})
+    assert again.status_code == 409 and again.json()["error"] == "ALREADY_REGISTERED"
+
+
+def test_wrong_region_names_the_right_one(client):
+    client.post("/organizations", json={"organization": canonical()})
+    r = client.post("/regions/la_county:westside/orgs/foothill_vans_demo/volunteers", json={"volunteer": kim()})
+    assert r.status_code == 409 and r.json()["error"] == "WRONG_REGION"
+    assert r.json()["reasons"] == [f"CORRECT_REGION:{EAST}"]
+    nowhere = client.post(f"/regions/{EAST}/orgs/foothill_vans_demo/volunteers",
+                          json={"volunteer": kim(volunteer_id="v_x", location={"type": "Point", "coordinates": [0, 0]})})
+    assert nowhere.json()["reasons"] == ["NO_REGION"]
+
+
+def test_volunteer_needs_existing_org_and_region(client):
+    assert client.post(f"/regions/{EAST}/orgs/nope_org/volunteers", json={"volunteer": kim()}).status_code == 404
+    client.post("/organizations", json={"organization": canonical()})
+    assert client.post("/regions/nope/orgs/foothill_vans_demo/volunteers", json={"volunteer": kim()}).status_code == 404
+
+
+def test_regions_cannot_overlap(client):
+    body = {"region_id": "la_county:overlap", "label": "Overlap (synthetic)",
+            "center": {"type": "Point", "coordinates": [-118.10, 34.10]},
+            "area": {"type": "Polygon", "coordinates": [[[-118.11, 34.09], [-118.09, 34.09], [-118.09, 34.11],
+                                                         [-118.11, 34.11], [-118.11, 34.09]]]}}
+    r = client.post("/regions", json={"region": body})
+    assert r.status_code == 409 and r.json()["error"] == "REGION_OVERLAP"
+    touching = {**body, "region_id": "la_county:north", "area": {"type": "Polygon", "coordinates": [[
+        [-118.13, 34.12], [-118.06, 34.12], [-118.06, 34.15], [-118.13, 34.15], [-118.13, 34.12]]]}}
+    assert client.post("/regions", json={"region": touching}).status_code == 201  # sharing an edge is fine
+
+
+def test_presence_and_shelter_sites(client):
+    client.post("/organizations", json={"organization": canonical(services=["SHELTER"])})
+    assert client.post(f"/regions/{EAST}/orgs/foothill_vans_demo").json()["added"] is True
+    site = {"site_id": "fv_site", "name": "Foothill Hall (fictional)",
+            "location": {"type": "Point", "coordinates": [-118.08, 34.10]}, "beds_available": 5, "features": [6]}
+    assert client.post(f"/regions/{EAST}/orgs/foothill_vans_demo/shelter_sites", json={"site": site}).status_code == 201
+    assert client.app.state.service.store.partners.locate_site("fv_site")[0].region_id == EAST
 
 
 def test_public_org_list_is_sanitized(client):
     r = client.get("/organizations")
-    assert r.status_code == 200
-    assert "sim_phone_" not in r.text  # no volunteer (or anyone's) phone numbers
-    for org in r.json()["organizations"]:
-        assert "volunteers" not in org and set(org["location"]) == {"label"}  # no volunteer records, no coordinates
-    eastside = next(o for o in r.json()["organizations"] if o["org_id"] == ORG)
-    assert eastside["volunteer_count"] == 1 and "volunteers" not in eastside
+    assert r.status_code == 200 and "sim_phone_" not in r.text and "coordinates" not in r.text
+    rc = next(o for o in r.json()["organizations"] if o["org_id"] == "red_cross_demo")
+    assert rc["volunteer_count"] == 3 and "volunteers" not in rc and len(rc["region_ids"]) == 4
 
 
-def test_add_volunteer_requires_matching_org_agent(client):
-    vol = new_org()["volunteers"][0]
-    path = f"/organizations/{ORG}/volunteers"
-    assert client.post(path, json={"volunteer": vol}).status_code == 403
-    assert client.post(path, json={"volunteer": vol}, headers=org_headers("red_cross_demo")).status_code == 403
-    assert client.post(path, json={"volunteer": vol}, headers=org_headers(ORG)).status_code == 201
-    assert client.post(path, json={"volunteer": vol}, headers=org_headers(ORG)).status_code == 409
+def test_agent_address_registry(client):
+    assert client.put("/agents/volunteer_network", json={"agent_address": "agent1qnetwork"}).status_code == 200
+    assert client.get("/agents").json()["agents"] == {"volunteer_network": "agent1qnetwork"}
+    assert client.put("/agents/not_a_role", json={"agent_address": "x"}).status_code == 404
+    client.post("/demo/alerts/trigger", json={"action": "ISSUE", "preset": "ZONE_3_WILDFIRE"})
+    feed = client.get("/demo/feeds/caloes").json()
+    r = client.post("/alerts/ingest", json={"source": {"source_id": "SYNTHETIC_CALOES",
+                                                       "source_type": "OFFICIAL_SIMULATION"}, "payload": feed})
+    assert r.json()["network_agent_address"] == "agent1qnetwork"
 
 
-# ---------------------------------------------------- org-scoped volunteers
-def test_org_agent_sees_only_its_own_volunteers(client):
-    r = client.get(f"/orgs/{ORG}/volunteers", headers=org_headers(ORG))
-    assert r.status_code == 200
-    vols = r.json()["volunteers"]
-    assert [v["volunteer_id"] for v in vols] == ["volunteer_sarah"]
-    assert vols[0]["phone"] == "sim_phone_sarah" and vols[0]["availability"]["state"] == "UNASKED"
-    # Another org's agent cannot read Eastside's volunteers.
-    assert client.get(f"/orgs/{ORG}/volunteers", headers=org_headers("red_cross_demo")).status_code == 403
-    client.headers.pop("Authorization")
-    assert client.get(f"/orgs/{ORG}/volunteers", headers=org_headers(ORG)).status_code == 401
-
-
-def test_availability_recorded_per_alert(client):
-    path = f"/orgs/{ORG}/volunteers/volunteer_sarah/availability"
-    r = client.post(path, json={"alert_id": "alert_001", "available": True}, headers=org_headers(ORG))
-    assert r.status_code == 200 and r.json()["availability"] == "AVAILABLE" and r.json()["duplicate"] is False
-    again = client.post(path, json={"alert_id": "alert_001", "available": True}, headers=org_headers(ORG))
-    assert again.json()["duplicate"] is True
-    view = client.get(f"/orgs/{ORG}/volunteers", params={"alert_id": "alert_001"}, headers=org_headers(ORG)).json()
-    assert view["volunteers"][0]["availability"]["state"] == "AVAILABLE"
-    other = client.get(f"/orgs/{ORG}/volunteers", params={"alert_id": "alert_999"}, headers=org_headers(ORG)).json()
-    assert other["volunteers"][0]["availability"]["state"] == "UNASKED"
-    stale = client.post(path, json={"alert_id": "alert_000", "available": True}, headers=org_headers(ORG))
-    assert stale.status_code == 409 and stale.json()["error"] == "STALE_AVAILABILITY"
-
-
-def test_availability_rules(client):
-    h = org_headers("unlisted_vans_demo")
-    r = client.post("/orgs/unlisted_vans_demo/volunteers/volunteer_tom/availability",
-                    json={"alert_id": "alert_001", "available": True}, headers=h)
-    assert r.status_code == 409 and r.json()["error"] == "VOLUNTEER_NOT_APPROVED"
-    r = client.post(f"/orgs/{ORG}/volunteers/volunteer_nobody/availability",
-                    json={"alert_id": "alert_001", "available": True}, headers=org_headers(ORG))
-    assert r.status_code == 404
-    # An org agent cannot answer for another org's volunteer.
-    r = client.post(f"/orgs/{ORG}/volunteers/volunteer_sarah/availability",
-                    json={"alert_id": "alert_001", "available": True}, headers=org_headers("red_cross_demo"))
-    assert r.status_code == 403
+def test_resident_pickup_sms_only_counts_with_accepted_volunteer(svc):
+    from doorstep.models import Evidence
+    from .test_matching_v2 import accept, propose, ready
+    ready(svc)
+    svc.submit_resident_response("case_maria_001", "RECOGIDO", "es", sender="sim_phone_maria", external_id="early")
+    assert any(e.event_type == "PICKUP_CONFIRMATION_IGNORED" for e in svc.events.for_case("case_maria_001"))
+    aid = propose(svc)["match"]["assignment_id"]
+    accept(svc, aid)
+    svc.submit_resident_response("case_maria_001", "ya me recogieron", "es", sender="sim_phone_maria", external_id="ok")
+    out = svc.confirm_pickup(aid, Evidence(type="VOLUNTEER_AND_RESIDENT_CONFIRMATION", volunteer_confirmed=True))
+    assert out["resident_status"] == "PICKUP_CONFIRMED"
 
 
 def test_registration_is_on_the_timeline(svc):

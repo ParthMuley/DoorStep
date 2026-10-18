@@ -186,7 +186,7 @@ def test_real_world_feed_is_display_only(svc):
     # David sits inside that polygon, but live data never changes a resident's zone.
     assert svc.alerts.zone_status_label(svc.store.get_resident_profile("resident_002")) == "UNKNOWN"
     with pytest.raises(Conflict):
-        svc.alerts.start_outreach("eastside_rides_demo", alert["alert_id"])
+        svc.alerts.start_outreach(alert["alert_id"])
 
 
 # ------------------------------------------------------------ awareness radius
@@ -202,7 +202,28 @@ def test_awareness_radius_never_triggers_the_evacuation_flow(svc):
 # ------------------------------------------------------------ outreach orgs
 def test_outreach_orgs_closest_matching_approved(svc):
     r = issue(svc)
-    assert [o["org_id"] for o in r["outreach_orgs"]] == ["neighbor_sedans_demo", "eastside_rides_demo", "red_cross_demo"]
+    orgs = {o["org_id"]: o for o in r["outreach_orgs"]}
+    assert list(orgs) == ["eastside_rides_demo", "neighbor_sedans_demo", "red_cross_demo"]  # all in the fire's region
+    # Red Cross: only its nearby regions (East + South Valley). Its SF volunteers are never contacted.
+    assert orgs["red_cross_demo"]["region_ids"] == ["la_county:east_valley", "la_county:south_valley"]
+
+
+def test_region_outside_org_radius_is_excluded(svc):
+    """Neighborhood Sedans has a 10 km radius: if its only region were ~26 km away it would not be contacted."""
+    from doorstep.models import point
+    p = svc.store.partners
+    region_id = p.locate_volunteer("volunteer_joe")[0].region_id
+
+    def drop_joe(r):
+        r.orgs = [o for o in r.orgs if o.org_id != "neighbor_sedans_demo"]
+        return True, None
+    p.mutate_region(region_id, drop_joe)
+    svc.registry.add_volunteer("la_county:westside", "neighbor_sedans_demo", __import__("doorstep.models", fromlist=["Volunteer"]).Volunteer(
+        volunteer_id="volunteer_joe2", name="Joe 2 (synthetic)", phone="sim_phone_joe2",
+        location=point(34.0400, -118.4000), vehicle_type="SEDAN", vehicle_seats=3, needs_they_can_cater=[4, 7],
+        approved=True))
+    ids = [o["org_id"] for o in issue(svc)["outreach_orgs"]]
+    assert "neighbor_sedans_demo" not in ids
 
 
 def test_flood_alert_contacts_flood_orgs(svc):
@@ -225,67 +246,99 @@ def test_unknown_calamity_type_contacts_any_approved_transport_org(svc):
     assert "unlisted_vans_demo" not in ids and len(ids) == 3
 
 
-# ------------------------------------------------------------ volunteer outreach
+# ------------------------------------------------------------ volunteer outreach (Volunteer Network, v2.1)
+NETWORK = {"X-Agent-Token": "change-me-network-agent-token"}
+
+
 def outreach_alert(svc):
     return issue(svc)["new_alerts"][0]["alert_id"]
 
 
-def test_volunteer_outreach_and_replies(client):
+def test_network_outreach_and_replies(client):
     svc = client.app.state.service
     alert_id = outreach_alert(svc)
-    h = {"X-Org-Agent": "red_cross_demo"}
-    r = client.post("/orgs/red_cross_demo/outreach", json={"alert_id": alert_id}, headers=h)
-    assert r.status_code == 200 and [a["volunteer_id"] for a in r.json()["asked"]] == ["volunteer_maya", "volunteer_lee"]
-    assert client.post("/orgs/red_cross_demo/outreach", json={"alert_id": alert_id}, headers=h).json()["duplicate"]
+    assert client.post(f"/alerts/{alert_id}/outreach", json={}).status_code == 403  # network token required
+    r = client.post(f"/alerts/{alert_id}/outreach", json={}, headers=NETWORK)
+    assert r.status_code == 200
+    by_org = {o["org_id"]: o for o in r.json()["orgs"]}
+    assert [a["volunteer_id"] for a in by_org["red_cross_demo"]["asked"]] == ["volunteer_maya", "volunteer_lee"]
+    asked = {a["volunteer_id"] for o in by_org.values() for a in o["asked"]}
+    assert "volunteer_sam" not in asked  # Red Cross SF volunteer: never asked about an LA fire
+    assert client.post(f"/alerts/{alert_id}/outreach", json={}, headers=NETWORK).json()["duplicate"]
     sms = [m for m in svc.store.list_messages() if m.recipient == "sim_phone_lee"]
     assert sms and sms[0].body.startswith("DOORSTEP DEMO")
-    # Lee answers YES by SMS; Maya never answers.
+    # Lee answers YES by SMS; the network agent posts Maya's NO; Joe/Sarah stay silent.
     yes = client.post("/sim/inbound", json={"sender": "sim_phone_lee", "text": "YES", "external_id": "lee-1"})
     assert yes.status_code == 200 and yes.json()["availability"] == "AVAILABLE"
-    client.post("/sim/outreach/" + alert_id + "/deadline")
-    vols = {v["volunteer_id"]: v["availability"]["state"] for v in client.get(
-        "/orgs/red_cross_demo/volunteers", params={"alert_id": alert_id}, headers=h).json()["volunteers"]}
-    assert vols == {"volunteer_maya": "NO_REPLY", "volunteer_lee": "AVAILABLE"}
-    summary = client.get(f"/alerts/{alert_id}/outreach").json()["orgs"][0]
-    assert (summary["asked"], summary["available"], summary["no_reply"]) == (2, 1, 1)
+    no = client.post(f"/alerts/{alert_id}/volunteers/volunteer_maya/availability",
+                     json={"org_id": "red_cross_demo", "available": False}, headers=NETWORK)
+    assert no.json()["availability"] == "UNAVAILABLE"
+    live = client.get(f"/alerts/{alert_id}/outreach").json()["orgs"]
+    rc = next(o for o in live if o["org_id"] == "red_cross_demo")
+    assert (rc["asked"], rc["available"], rc["unavailable"], rc["no_reply"]) == (2, 1, 1, 0)  # live, no NO_REPLY yet
+    client.post(f"/sim/outreach/{alert_id}/deadline")
+    eastside = next(o for o in client.get(f"/alerts/{alert_id}/outreach").json()["orgs"]
+                    if o["org_id"] == "eastside_rides_demo")
+    assert eastside["no_reply"] == 1 and eastside["region_ids"] == ["la_county:east_valley"]
+
+
+def test_availability_requires_the_right_org(client):
+    svc = client.app.state.service
+    alert_id = outreach_alert(svc)
+    client.post(f"/alerts/{alert_id}/outreach", json={}, headers=NETWORK)
+    r = client.post(f"/alerts/{alert_id}/volunteers/volunteer_sarah/availability",
+                    json={"org_id": "red_cross_demo", "available": True}, headers=NETWORK)
+    assert r.status_code == 403 and "WRONG_ORG" in r.json()["reasons"]
+    r = client.post(f"/alerts/{alert_id}/volunteers/volunteer_sarah/availability",
+                    json={"org_id": "eastside_rides_demo", "available": True})
+    assert r.status_code == 403  # no network token
 
 
 def test_volunteer_says_no(client):
     svc = client.app.state.service
     alert_id = outreach_alert(svc)
-    client.post("/orgs/eastside_rides_demo/outreach", json={"alert_id": alert_id},
-                headers={"X-Org-Agent": "eastside_rides_demo"})
+    client.post(f"/alerts/{alert_id}/outreach", json={}, headers=NETWORK)
     r = client.post("/sim/inbound", json={"sender": "sim_phone_sarah", "text": "no"})
     assert r.json()["availability"] == "UNAVAILABLE"
 
 
 def test_new_alert_outreach_makes_old_answers_stale(svc):
     first = outreach_alert(svc)
-    svc.alerts.start_outreach("eastside_rides_demo", first)
-    svc.registry.record_availability("eastside_rides_demo", "volunteer_sarah", alert_id=first, available=True)
-    # A new calamity alert: outreach asks again; Sarah's old YES no longer counts.
+    svc.alerts.start_outreach(first)
+    svc.registry.record_availability(first, "volunteer_sarah", org_id="eastside_rides_demo", available=True)
     svc.alerts.feed.trigger("ISSUE", zone_id="zone_9", status="Evacuation Warning", event_type="Wildfire",
                             geometry={"type": "Polygon", "coordinates": [[[-118.12, 34.08], [-118.11, 34.08],
                                                                           [-118.11, 34.09], [-118.12, 34.09],
                                                                           [-118.12, 34.08]]]})
     second = next(a["alert_id"] for a in ingest(svc)["new_alerts"] if a["zone_id"] == "zone_9")
-    svc.alerts.start_outreach("eastside_rides_demo", second)
-    view = svc.registry.org_volunteers("eastside_rides_demo", second)["volunteers"][0]["availability"]
-    assert view["state"] == "ASKED"
+    svc.alerts.start_outreach(second)
+    assert svc.store.partners.locate_volunteer("volunteer_sarah")[2].availability.state == "ASKED"
     with pytest.raises(Conflict) as exc:
-        svc.registry.record_availability("eastside_rides_demo", "volunteer_sarah", alert_id=first, available=True)
+        svc.registry.record_availability(first, "volunteer_sarah", org_id="eastside_rides_demo", available=True)
     assert exc.value.code == "STALE_AVAILABILITY"
 
 
-def test_outreach_refused_for_unapproved_org_and_wrong_agent(client):
+def test_unapproved_volunteers_skipped_and_unapproved_orgs_never_selected(svc):
+    alert_id = outreach_alert(svc)
+    out = svc.alerts.start_outreach(alert_id)
+    assert "unlisted_vans_demo" not in [o["org_id"] for o in out["orgs"]]
+    from doorstep.services.errors import Conflict as C
+    with pytest.raises(C):
+        svc.registry.record_availability(alert_id, "volunteer_tom", org_id="unlisted_vans_demo", available=True)
+
+
+def test_regions_near_view(client):
     svc = client.app.state.service
     alert_id = outreach_alert(svc)
-    r = client.post("/orgs/unlisted_vans_demo/outreach", json={"alert_id": alert_id},
-                    headers={"X-Org-Agent": "unlisted_vans_demo"})
-    assert r.status_code == 409 and r.json()["error"] == "ORG_NOT_APPROVED"
-    r = client.post("/orgs/eastside_rides_demo/outreach", json={"alert_id": alert_id},
-                    headers={"X-Org-Agent": "red_cross_demo"})
-    assert r.status_code == 403
+    view = client.get("/regions/near", params={"alert_id": alert_id}).json()
+    ids = [r["region_id"] for r in view["regions"]]
+    assert ids[0] == "la_county:east_valley" and "sf:mission" not in ids
+    assert view["regions"][0]["distance_km"] == 0.0
+    point_view = client.get("/regions/near", params={"lat": 37.76, "lon": -122.42, "radius_km": 5}).json()
+    assert [r["region_id"] for r in point_view["regions"]] == ["sf:mission"]
+    transport_only = client.get("/regions/near", params={"alert_id": alert_id, "service": "TRANSPORT"}).json()
+    east = transport_only["regions"][0]["orgs"]
+    assert "civic_shelter_demo" not in [o["org_id"] for o in east]
 
 
 def test_unknown_sms_sender_still_rejected(client):

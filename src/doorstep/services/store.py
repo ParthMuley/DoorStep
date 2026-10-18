@@ -20,14 +20,11 @@ from doorstep.models import (
     Escalation,
     MessageEvent,
     Offer,
-    Organization,
     ProviderRegistration,
     RecoveryReferral,
     Resident,
     ResidentProfile,
     ServiceRequest,
-    Volunteer,
-    VolunteerAvailability,
     VerificationEvent,
 )
 
@@ -36,6 +33,7 @@ from pymongo.errors import DuplicateKeyError
 from .db import Database
 from .errors import NotFound
 from .legacy import to_legacy_resident
+from .partners import PartnerStore
 
 M = TypeVar("M", bound=BaseModel)
 ACCEPTED_STATES = ("ACCEPTED", "COMPLETED")
@@ -48,6 +46,7 @@ def _strip(doc: dict[str, Any]) -> dict[str, Any]:
 class Store:
     def __init__(self, db: Database):
         self.db = db
+        self.partners = PartnerStore(db)
 
     # --- generic helpers -------------------------------------------------
     def _get(self, coll: str, query: dict[str, Any], model: Type[M]) -> Optional[M]:
@@ -75,65 +74,7 @@ class Store:
             update["$unset"] = {f: "" for f in unset}
         self.db.coll(coll).update_one({"_id": key}, update, upsert=True)
 
-    # --- organizations (doorstep_orgs) ------------------------------------
-    def save_organization(self, o: Organization) -> None:
-        self._upsert("organizations", o.org_id, o)
-
-    def get_organization(self, org_id: str) -> Organization:
-        return self._require("organizations", {"_id": org_id}, Organization, org_id)
-
-    def find_organization(self, org_id: str) -> Optional[Organization]:
-        return self._get("organizations", {"_id": org_id}, Organization)
-
-    def list_organizations(self) -> list[Organization]:
-        return self._list("organizations", {}, Organization, sort="_id")
-
-    def add_volunteer(self, org_id: str, v: Volunteer) -> bool:
-        """Append a volunteer; False if the org is missing or the volunteer_id already exists there."""
-        result = self.db.coll("organizations").update_one(
-            {"_id": org_id, "volunteers.volunteer_id": {"$ne": v.volunteer_id}},
-            {"$push": {"volunteers": v.model_dump(mode="json")}})
-        return result.modified_count == 1
-
-    def set_volunteer_availability(self, org_id: str, volunteer_id: str, a: VolunteerAvailability) -> bool:
-        result = self.db.coll("organizations").update_one(
-            {"_id": org_id, "volunteers.volunteer_id": volunteer_id},
-            {"$set": {"volunteers.$.availability": a.model_dump(mode="json")}})
-        return result.matched_count == 1
-
-    def reserve_volunteer(self, org_id: str, volunteer_id: str, case_id: str, alert_ids) -> bool:
-        """Atomic: reserve only if AVAILABLE for one of ``alert_ids`` and not reserved by another case.
-        Re-reserving for the same case is a no-op success."""
-        coll = self.db.coll("organizations")
-        same = coll.find_one({"_id": org_id, "volunteers": {"$elemMatch": {
-            "volunteer_id": volunteer_id, "reserved_case_id": case_id}}})
-        if same:
-            return True
-        result = coll.update_one(
-            {"_id": org_id, "volunteers": {"$elemMatch": {
-                "volunteer_id": volunteer_id, "reserved_case_id": None,
-                "availability.state": "AVAILABLE",
-                "availability.alert_id": {"$in": list(alert_ids) if not isinstance(alert_ids, str) else [alert_ids]}}}},
-            {"$set": {"volunteers.$.reserved_case_id": case_id}})
-        return result.modified_count == 1
-
-    def release_volunteer(self, org_id: str, volunteer_id: str, case_id: str) -> bool:
-        result = self.db.coll("organizations").update_one(
-            {"_id": org_id, "volunteers": {"$elemMatch": {"volunteer_id": volunteer_id, "reserved_case_id": case_id}}},
-            {"$set": {"volunteers.$.reserved_case_id": None}})
-        return result.modified_count == 1
-
-    def take_bed(self, org_id: str, site_id: str) -> bool:
-        """Atomic: decrement a shelter site's beds only if one is left."""
-        result = self.db.coll("organizations").update_one(
-            {"_id": org_id, "shelter_sites": {"$elemMatch": {"site_id": site_id, "beds_available": {"$gte": 1}}}},
-            {"$inc": {"shelter_sites.$.beds_available": -1}})
-        return result.modified_count == 1
-
-    def return_bed(self, org_id: str, site_id: str) -> None:
-        self.db.coll("organizations").update_one(
-            {"_id": org_id, "shelter_sites.site_id": site_id}, {"$inc": {"shelter_sites.$.beds_available": 1}})
-
+    # --- partners (doorstep_partners): see services/partners.py ----------------
     def record_provider_event(self, key: str, payload: dict) -> tuple[dict, bool]:
         """Idempotent provider-side event. Returns (stored payload, created?)."""
         coll = self.db.coll("provider_events")

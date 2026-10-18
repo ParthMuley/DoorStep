@@ -8,6 +8,7 @@ from doorstep.services.errors import Conflict, InsufficientEvidence, InvalidTran
 from .conftest import DAVID, DAVID_SENDER, MARIA, MARIA_SENDER
 
 SIM = "SYNTHETIC_CALOES"
+NETWORK = {"X-Agent-Token": "change-me-network-agent-token"}
 
 
 def ingest(svc):
@@ -20,8 +21,7 @@ def alert_and_outreach(svc, replies=None):
     svc.alerts.feed.trigger("ISSUE", preset="ZONE_3_WILDFIRE")
     poll = ingest(svc)
     alert_id = next(a["alert_id"] for a in poll["new_alerts"] if a["status"] == "WARNING")
-    for org in ("neighbor_sedans_demo", "eastside_rides_demo", "red_cross_demo"):
-        svc.alerts.start_outreach(org, alert_id)
+    svc.alerts.start_outreach(alert_id)  # Volunteer Network: nearest suitable orgs, nearby regions only
     replies = replies if replies is not None else {"sim_phone_sarah": "YES", "sim_phone_joe": "YES",
                                                    "sim_phone_maya": "NO", "sim_phone_lee": "YES"}
     for phone, text in replies.items():
@@ -54,7 +54,30 @@ def accept_shelter(svc, aid, org="civic_shelter_demo", site="dest_center_a"):
 
 
 def volunteer(svc, org, vid):
-    return next(v for v in svc.store.get_organization(org).volunteers if v.volunteer_id == vid)
+    region, entry, v = svc.store.partners.locate_volunteer(vid)
+    assert entry.org_id == org
+    return v
+
+
+def edit_volunteer(svc, vid, **fields):
+    region = svc.store.partners.locate_volunteer(vid)[0]
+
+    def fn(r):
+        v = next(v for o in r.orgs for v in o.volunteers if v.volunteer_id == vid)
+        for k, val in fields.items():
+            setattr(v, k, val)
+        return True, None
+    svc.store.partners.mutate_region(region.region_id, fn)
+
+
+def no_beds_anywhere(svc):
+    for region in svc.store.partners.list_regions():
+        def fn(r):
+            for o in r.orgs:
+                for site in o.shelter_sites:
+                    site.beds_available = 0
+            return True, None
+        svc.store.partners.mutate_region(region.region_id, fn)
 
 
 # ------------------------------------------------------------ eligibility
@@ -103,9 +126,8 @@ def test_only_unsuitable_volunteers_available(svc):
 
 def test_route_through_order_zone_is_rejected(svc):
     ready(svc)
-    org = svc.store.get_organization("eastside_rides_demo")
-    org.volunteers[0].address.lat, org.volunteers[0].address.lon = 34.1150, -118.0950  # north of the ORDER zone
-    svc.store.save_organization(org)
+    from doorstep.models import point
+    edit_volunteer(svc, "volunteer_sarah", location=point(34.1150, -118.0950))  # north of the ORDER zone
     rejected = propose(svc, create_proposal=False)["evaluation"]["volunteers"]["rejected"]
     assert "ROUTE_THROUGH_ORDER_ZONE" in next(v for v in rejected if v["volunteer_id"] == "volunteer_sarah")["reason_codes"]
 
@@ -114,9 +136,7 @@ def test_caregiver_rides_along_needs_two_seats(svc):
     ready(svc)
     p = svc.store.get_resident_profile("resident_001")
     svc.store.save_resident_profile(p.model_copy(update={"needs": p.needs + [10]}))
-    org = svc.store.get_organization("eastside_rides_demo")
-    org.volunteers[0].vehicle_seats = 1
-    svc.store.save_organization(org)
+    edit_volunteer(svc, "volunteer_sarah", vehicle_seats=1)
     rejected = propose(svc, create_proposal=False)["evaluation"]["volunteers"]["rejected"]
     assert "NO_SEATS" in next(v for v in rejected if v["volunteer_id"] == "volunteer_sarah")["reason_codes"]
 
@@ -137,8 +157,8 @@ def test_match_reserves_volunteer_and_is_idempotent(svc):
 
 def test_volunteer_reserved_only_once(svc):
     alert_id = ready(svc)
-    assert svc.store.reserve_volunteer("eastside_rides_demo", "volunteer_sarah", "case_a", alert_id)
-    assert not svc.store.reserve_volunteer("eastside_rides_demo", "volunteer_sarah", "case_b", alert_id)
+    assert svc.store.partners.reserve_volunteer("volunteer_sarah", "case_a", alert_id)
+    assert not svc.store.partners.reserve_volunteer("volunteer_sarah", "case_b", alert_id)
     # Maria's match skips Sarah (reserved elsewhere) and gets Lee.
     view = propose(svc)
     assert view["match"]["volunteer_id"] == "volunteer_lee"
@@ -213,7 +233,7 @@ def test_shelter_beds_and_shelter_checkin(svc):
     ready(svc)
     aid = propose(svc)["match"]["assignment_id"]
     accept(svc, aid)
-    beds = lambda: svc.store.get_organization("civic_shelter_demo").shelter_sites[0].beds_available  # noqa: E731
+    beds = lambda: svc.store.partners.locate_site("dest_center_a")[2].beds_available  # noqa: E731
     before = beds()
     accept_shelter(svc, aid)
     assert beds() == before - 1
@@ -243,11 +263,7 @@ def test_pickup_rejects_wrong_volunteer_identity(svc):
 
 def test_shelter_without_beds_is_not_matched(svc):
     ready(svc)
-    for org_id in ("civic_shelter_demo", "red_cross_demo"):
-        org = svc.store.get_organization(org_id)
-        for site in org.shelter_sites:
-            site.beds_available = 0
-        svc.store.save_organization(org)
+    no_beds_anywhere(svc)
     view = propose(svc)
     assert view["no_match_reason"] == "NO_SHELTER"
     assert volunteer(svc, "eastside_rides_demo", "volunteer_sarah").reserved_case_id is None
@@ -293,15 +309,16 @@ def test_stale_feed_refuses_matching(svc):
 
 
 # ------------------------------------------------------------ HTTP
-def test_http_accept_requires_matching_org_header(client):
+def test_http_accept_requires_network_token(client):
     svc = client.app.state.service
     ready(svc)
     aid = client.post("/matches/propose", json={"case_id": MARIA}).json()["match"]["assignment_id"]
     body = {"org_id": "eastside_rides_demo", "volunteer_id": "volunteer_sarah", "decision": "ACCEPTED"}
     assert client.post(f"/assignments/{aid}/accept", json=body).status_code == 403
-    assert client.post(f"/assignments/{aid}/accept", json=body,
-                       headers={"X-Org-Agent": "red_cross_demo"}).status_code == 403
-    r = client.post(f"/assignments/{aid}/accept", json=body, headers={"X-Org-Agent": "eastside_rides_demo"})
+    assert client.post(f"/assignments/{aid}/accept", json=body, headers={"X-Agent-Token": "wrong"}).status_code == 403
+    wrong_org = {**body, "org_id": "red_cross_demo"}  # right token, but Sarah isn't Red Cross's volunteer
+    assert client.post(f"/assignments/{aid}/accept", json=wrong_org, headers=NETWORK).status_code == 403
+    r = client.post(f"/assignments/{aid}/accept", json=body, headers=NETWORK)
     assert r.status_code == 200 and r.json()["schema_version"] == "2.0"
 
 

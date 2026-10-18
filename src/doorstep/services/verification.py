@@ -54,6 +54,8 @@ def check_pickup_evidence(evidence: Evidence, resident: Resident, transport: Ass
     """Raise unless sufficient. Returns whether party ids were verified."""
     verified = _verify_party_ids(evidence, resident, transport, None)
     parties = _parties(evidence)
+    if transport.resident_pickup_confirmed_at:  # resident/caregiver already confirmed by SMS
+        parties.add(P.RESIDENT.value)
     if evidence.provider_confirmed:
         parties.add(P.TRANSPORT_PROVIDER.value)
     missing = []

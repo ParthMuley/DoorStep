@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from doorstep.models import SCHEMA_VERSION
 from doorstep.services.engine import DoorstepService
 
 from . import schemas as s
-from .security import correlation_header, require_demo_token, require_org_agent
+from .security import correlation_header, require_agent_token, require_demo_token
 
 router = APIRouter()
 write = APIRouter(dependencies=[Depends(require_demo_token)])
@@ -77,6 +77,21 @@ def synthetic_caloes_feed(service: DoorstepService = Depends(svc)):
     return service.alerts.feed.render_caloes()
 
 
+@router.get("/regions/near")
+def regions_near(alert_id: Optional[str] = None, zone_id: Optional[str] = None, lat: Optional[float] = None,
+                 lon: Optional[float] = None, radius_km: Optional[float] = None, calamity_type: Optional[str] = None,
+                 service_type: Optional[str] = Query(default=None, alias="service"),
+                 service: DoorstepService = Depends(svc)):
+    return out(service.alerts.regions_near_view(alert_id=alert_id, zone_id=zone_id, lat=lat, lon=lon,
+                                                radius_km=radius_km, calamity_type=calamity_type,
+                                                service=service_type), version=V2)
+
+
+@router.get("/agents")
+def list_agents(service: DoorstepService = Depends(svc)):
+    return out({"agents": service.store.partners.list_agents()}, version=V2)
+
+
 @router.get("/alerts/active")
 def alerts_active(service: DoorstepService = Depends(svc)):
     return out(service.alerts.active_view(), version=V2)
@@ -113,28 +128,46 @@ def register_resident(body: s.RegisterResidentBody, corr: Optional[str] = Depend
 @write.post("/organizations")
 def register_organization(body: s.RegisterOrganizationBody, corr: Optional[str] = Depends(correlation_header),
                           service: DoorstepService = Depends(svc)):
-    return out(service.registry.register_organization(body.organization, pick(corr, body) or ""), 201, V2)
+    view, created = service.registry.register_organization(body.organization, pick(corr, body) or "")
+    return out(view, 201 if created else 200, V2)
 
 
-@write.post("/organizations/{org_id}/volunteers")
-def add_volunteer(org_id: str, body: s.AddVolunteerBody, _: str = Depends(require_org_agent),
+@write.post("/regions")
+def create_region(body: s.RegionBody, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    return out(service.registry.create_region(body.region, pick(corr, body) or ""), 201, V2)
+
+
+@write.post("/regions/{region_id}/orgs/{org_id}")
+def add_presence(region_id: str, org_id: str, corr: Optional[str] = Depends(correlation_header),
+                 service: DoorstepService = Depends(svc)):
+    return out(service.registry.add_presence(region_id, org_id, corr or ""), 201, V2)
+
+
+@write.post("/regions/{region_id}/orgs/{org_id}/volunteers")
+def add_volunteer(region_id: str, org_id: str, body: s.AddVolunteerBody,
                   corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
-    return out(service.registry.add_volunteer(org_id, body.volunteer, pick(corr, body) or ""), 201, V2)
+    return out(service.registry.add_volunteer(region_id, org_id, body.volunteer, pick(corr, body) or ""), 201, V2)
 
 
-@write.get("/orgs/{org_id}/volunteers")
-def org_volunteers(org_id: str, alert_id: Optional[str] = None, _: str = Depends(require_org_agent),
-                   service: DoorstepService = Depends(svc)):
-    return out(service.registry.org_volunteers(org_id, alert_id), version=V2)
+@write.post("/regions/{region_id}/orgs/{org_id}/shelter_sites")
+def add_site(region_id: str, org_id: str, body: s.SiteBody, corr: Optional[str] = Depends(correlation_header),
+             service: DoorstepService = Depends(svc)):
+    return out(service.registry.add_site(region_id, org_id, body.site, pick(corr, body) or ""), 201, V2)
 
 
-@write.post("/orgs/{org_id}/volunteers/{volunteer_id}/availability")
-def record_availability(org_id: str, volunteer_id: str, body: s.AvailabilityBody,
-                        _: str = Depends(require_org_agent), corr: Optional[str] = Depends(correlation_header),
-                        service: DoorstepService = Depends(svc)):
+@write.post("/alerts/{alert_id}/volunteers/{volunteer_id}/availability", dependencies=[Depends(require_agent_token)])
+def record_availability(alert_id: str, volunteer_id: str, body: s.AvailabilityBody,
+                        corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
     return out(service.registry.record_availability(
-        org_id, volunteer_id, alert_id=body.alert_id, available=body.available, responded_at=body.responded_at,
+        alert_id, volunteer_id, org_id=body.org_id, available=body.available, responded_at=body.responded_at,
         idempotency_key=body.idempotency_key, correlation_id=pick(corr, body) or ""), version=V2)
+
+
+@write.put("/agents/{role}")
+def register_agent(role: str, body: s.AgentAddressBody, service: DoorstepService = Depends(svc)):
+    service.store.partners.set_agent(role, body.agent_address)
+    return out({"role": role, "agent_address": body.agent_address}, version=V2)
 
 
 @write.post("/cases/{case_id}/responses")
@@ -241,10 +274,10 @@ def demo_alerts_trigger(body: s.AlertTriggerBody, corr: Optional[str] = Depends(
                 "frozen": st.frozen_at_ms is not None, "poll_result": poll}, version=V2)
 
 
-@write.post("/orgs/{org_id}/outreach")
-def org_outreach(org_id: str, body: s.OutreachBody, _: str = Depends(require_org_agent),
-                 corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
-    return out(service.alerts.start_outreach(org_id, body.alert_id, body.idempotency_key,
+@write.post("/alerts/{alert_id}/outreach", dependencies=[Depends(require_agent_token)])
+def alert_outreach_start(alert_id: str, body: s.OutreachBody, corr: Optional[str] = Depends(correlation_header),
+                         service: DoorstepService = Depends(svc)):
+    return out(service.alerts.start_outreach(alert_id, body.idempotency_key, body.max_orgs,
                                              pick(corr, body) or ""), version=V2)
 
 
@@ -264,11 +297,9 @@ def matches_propose(body: s.ProposeMatchBody, corr: Optional[str] = Depends(corr
     return out(view, 201 if created else 200, V2)
 
 
-@write.post("/assignments/{assignment_id}/accept")
-def assignment_accept(assignment_id: str, body: s.AcceptV2Body, x_org_agent: Optional[str] = Header(default=None),
-                      corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
-    if x_org_agent != body.org_id:
-        raise HTTPException(status_code=403, detail="X-Org-Agent must match org_id")
+@write.post("/assignments/{assignment_id}/accept", dependencies=[Depends(require_agent_token)])
+def assignment_accept(assignment_id: str, body: s.AcceptV2Body, corr: Optional[str] = Depends(correlation_header),
+                      service: DoorstepService = Depends(svc)):
     return out(service.matching.accept(
         assignment_id, org_id=body.org_id, volunteer_id=body.volunteer_id, site_id=body.site_id,
         decision=body.decision, idempotency_key=body.idempotency_key, correlation_id=pick(corr, body)), version=V2)

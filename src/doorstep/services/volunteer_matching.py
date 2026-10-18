@@ -20,7 +20,7 @@ from typing import Any, Optional
 from shapely.geometry import LineString
 from shapely.geometry.base import BaseGeometry
 
-from doorstep.models import NeedCode, Organization, ResidentProfile
+from doorstep.models import NeedCode, Region, RegionOrg, ResidentProfile
 
 from . import geo
 from .db import Database  # noqa: F401  (type hints only)
@@ -55,7 +55,7 @@ class Candidate:
         return out
 
 
-def _handles(org: Organization, calamity_type: str) -> bool:
+def _handles(org: RegionOrg, calamity_type: str) -> bool:
     return calamity_type in ("UNKNOWN", "", None) or "ANY" in org.calamity_types or calamity_type in org.calamity_types
 
 
@@ -74,7 +74,7 @@ def _rank(cands: list[Candidate]) -> list[Candidate]:
 
 
 def evaluate_volunteers(profile: ResidentProfile, case_id: str, alert_ids: set[str], calamity_type: str,
-                        orgs: list[Organization], order_polygons: list[BaseGeometry],
+                        entries: list[tuple[Region, RegionOrg]], order_polygons: list[BaseGeometry],
                         declined: set[str]) -> list[Candidate]:
     """``alert_ids``: active alerts of the current event; availability for any of them counts."""
     needs = set(profile.needs)
@@ -82,13 +82,13 @@ def evaluate_volunteers(profile: ResidentProfile, case_id: str, alert_ids: set[s
     seats_needed = 1 + (1 if int(NeedCode.CAREGIVER_RIDES_ALONG) in needs else 0)
     lat, lon = profile.address.lat, profile.address.lon
     out: list[Candidate] = []
-    for org in orgs:
+    for region, org in entries:
         if "TRANSPORT" not in org.services:
             continue
         for v in org.volunteers:
             reasons: list[str] = []
             missing: list[int] = []
-            km = round(geo.haversine_km(v.address.lat, v.address.lon, lat, lon), 1)
+            km = round(geo.haversine_km(v.location.lat, v.location.lon, lat, lon), 1)
             if not org.approved:
                 reasons.append("ORG_NOT_APPROVED")
             if not v.approved:
@@ -117,7 +117,7 @@ def evaluate_volunteers(profile: ResidentProfile, case_id: str, alert_ids: set[s
                 reasons.append("NO_SEATS")
             if km > org.service_radius_km:
                 reasons.append("OUTSIDE_SERVICE_RADIUS")
-            if _crosses(LineString([(v.address.lon, v.address.lat), (lon, lat)]), order_polygons):
+            if _crosses(LineString([(v.location.lon, v.location.lat), (lon, lat)]), order_polygons):
                 reasons.append("ROUTE_THROUGH_ORDER_ZONE")
             eligible = not reasons
             if eligible:
@@ -127,23 +127,23 @@ def evaluate_volunteers(profile: ResidentProfile, case_id: str, alert_ids: set[s
                            + ["SEATS_OK", "OUTSIDE_ORDER_ZONE", "ROUTE_AVOIDS_ORDER_ZONES"])
             out.append(Candidate(org_id=org.org_id, entity_id=v.volunteer_id, distance_km=km, eligible=eligible,
                                  reason_codes=reasons, missing_needs=missing if not eligible else [],
-                                 extra={"vehicle_type": v.vehicle_type, "org_agent_address": org.agent_address}))
+                                 extra={"vehicle_type": v.vehicle_type, "region_id": region.region_id}))
     return _rank(out)
 
 
-def evaluate_shelters(profile: ResidentProfile, calamity_type: str, orgs: list[Organization],
+def evaluate_shelters(profile: ResidentProfile, calamity_type: str, entries: list[tuple[Region, RegionOrg]],
                       order_polygons: list[BaseGeometry]) -> list[Candidate]:
     needs = set(profile.needs)
     required = needs & SHELTER_RELEVANT
     if int(NeedCode.WHEELCHAIR) in needs:
         required.add(int(NeedCode.STEP_FREE_DESTINATION))  # a wheelchair user needs step-free entry
     out: list[Candidate] = []
-    for org in orgs:
+    for region, org in entries:
         if "SHELTER" not in org.services:
             continue
         for s in org.shelter_sites:
             reasons: list[str] = []
-            km = round(geo.haversine_km(profile.address.lat, profile.address.lon, s.lat, s.lon), 1)
+            km = round(geo.haversine_km(profile.address.lat, profile.address.lon, s.location.lat, s.location.lon), 1)
             if not org.approved:
                 reasons.append("ORG_NOT_APPROVED")
             if not _handles(org, calamity_type):
@@ -153,7 +153,7 @@ def evaluate_shelters(profile: ResidentProfile, calamity_type: str, orgs: list[O
                 reasons.append("NEEDS_NOT_COVERED")
             if s.beds_available < 1:
                 reasons.append("NO_BEDS")
-            if any(geo.covers(p, s.lat, s.lon) for p in order_polygons):
+            if any(geo.covers(p, s.location.lat, s.location.lon) for p in order_polygons):
                 reasons.append("SHELTER_IN_ORDER_ZONE")
             eligible = not reasons
             if eligible:
@@ -162,7 +162,7 @@ def evaluate_shelters(profile: ResidentProfile, calamity_type: str, orgs: list[O
                     ["PET_OK"] if int(NeedCode.PET) in required else []) + ["BEDS_OK", "OUTSIDE_ORDER_ZONE"]
             out.append(Candidate(org_id=org.org_id, entity_id=s.site_id, distance_km=km, eligible=eligible,
                                  reason_codes=reasons, missing_needs=missing if not eligible else [],
-                                 extra={"site_name": s.name, "shelter_agent_address": org.agent_address}))
+                                 extra={"site_name": s.name, "region_id": region.region_id}))
     return _rank(out)
 
 

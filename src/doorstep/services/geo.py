@@ -42,3 +42,16 @@ def distance_to_km(geom: BaseGeometry, lat: float, lon: float) -> float:
         return 0.0
     nearest = nearest_points(geom, pt)[0]
     return haversine_km(lat, lon, nearest.y, nearest.x)
+
+
+def geometry_distance_km(a: BaseGeometry, b: BaseGeometry) -> float:
+    """Great-circle distance between the nearest points of two geometries (0 if they touch/overlap)."""
+    if a.intersects(b):
+        return 0.0
+    pa, pb = nearest_points(a, b)
+    return haversine_km(pa.y, pa.x, pb.y, pb.x)
+
+
+def km_to_degrees(km: float) -> float:
+    """Generous degree buffer for coarse pre-filtering (exact distance is computed afterwards)."""
+    return km / 111.0 * 1.5

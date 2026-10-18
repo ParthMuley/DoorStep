@@ -38,8 +38,12 @@ class Assignment(DoorstepModel):
     volunteer_id: Optional[str] = None
     vehicle_type: Optional[str] = None
     site_id: Optional[str] = None
+    region_id: Optional[str] = None
     alert_id: Optional[str] = None
     eta_minutes: Optional[int] = None
+    # Resident side of pickup, recorded from a resident/caregiver SMS (contract v2.1 §5.12).
+    resident_pickup_confirmed_at: Optional[str] = None
+    resident_pickup_confirmed_by: Optional[str] = None
     confirmed_pickup_at: Optional[str] = None
     confirmed_arrival_at: Optional[str] = None
     correlation_id: str = ""

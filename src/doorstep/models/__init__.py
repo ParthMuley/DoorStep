@@ -28,14 +28,18 @@ from .registry import (
     AvailabilityState,
     CalamityType,
     EmergencyContact,
+    GeoPoint,
     Location,
     Organization,
     OrgService,
     RecoveryHelpType,
+    Region,
+    RegionOrg,
     ResidentProfile,
     ShelterSite,
     Volunteer,
     VolunteerAvailability,
+    point,
 )
 from .alerts import (
     AlertStatus,

@@ -70,11 +70,17 @@ def test_alert_ingest_and_outreach_on_real_mongodb():
                                    idempotency_key="real-2")
         assert len(first["checkins_sent"]) == 2 and repeat["checkins_sent"] == []
         alert_id = first["new_alerts"][0]["alert_id"]
-        svc.alerts.start_outreach("red_cross_demo", alert_id)
+        assert not svc.store.partners.is_mock  # the real 2dsphere $geoIntersects path is exercised here
+        out = svc.alerts.start_outreach(alert_id)
+        asked = {a["volunteer_id"] for o in out["orgs"] for a in o["asked"]}
+        assert "volunteer_sam" not in asked and {"volunteer_lee", "volunteer_maya"} <= asked
         svc.inbound_sms("sim_phone_lee", "YES", external_id="lee-real")
-        states = {v["volunteer_id"]: v["availability"]["state"]
-                  for v in svc.registry.org_volunteers("red_cross_demo", alert_id)["volunteers"]}
-        assert states == {"volunteer_maya": "ASKED", "volunteer_lee": "AVAILABLE"}
+        p = svc.store.partners
+        assert p.locate_volunteer("volunteer_lee")[2].availability.state == "AVAILABLE"
+        assert p.locate_volunteer("volunteer_maya")[2].availability.state == "ASKED"
+        assert p.region_for_point(34.1012, -118.0964).region_id == "la_county:east_valley"
+        near = [r.region_id for r, _ in p.regions_near(__import__("shapely.geometry", fromlist=["Point"]).Point(-122.42, 37.76), 5)]
+        assert near == ["sf:mission"]
         assert svc.alerts.zone_status_label(svc.store.get_resident_profile("resident_002")) == "ORDER"
     finally:
         real.drop_database(users)

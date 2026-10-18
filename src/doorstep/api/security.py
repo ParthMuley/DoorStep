@@ -27,8 +27,14 @@ def correlation_header(x_correlation_id: str | None = Header(default=None)) -> s
     return x_correlation_id
 
 
-def require_org_agent(org_id: str, x_org_agent: str | None = Header(default=None)) -> str:
-    """Org-scoped routes: the caller must identify as the org in the path (contract v2.0 §1)."""
-    if not x_org_agent or not hmac.compare_digest(x_org_agent, org_id):
-        raise HTTPException(status_code=403, detail="X-Org-Agent must match the organization in the path")
-    return org_id
+DEFAULT_NETWORK_TOKEN = "change-me-network-agent-token"  # never commit a real value
+
+
+def network_token() -> str:
+    return os.environ.get("NETWORK_AGENT_TOKEN") or DEFAULT_NETWORK_TOKEN
+
+
+def require_agent_token(x_agent_token: str | None = Header(default=None)) -> None:
+    """Network-acting routes (contract v2.1 §1): only the Volunteer Network agent holds this token."""
+    if not x_agent_token or not hmac.compare_digest(x_agent_token, network_token()):
+        raise HTTPException(status_code=403, detail="Missing or invalid X-Agent-Token")

@@ -11,7 +11,9 @@ from doorstep.models import (
     Evidence,
     Language,
     Organization,
+    Region,
     ResidentProfile,
+    ShelterSite,
     TransportOfferIn,
     Volunteer,
 )
@@ -40,11 +42,23 @@ class AddVolunteerBody(Body):
     volunteer: Volunteer
 
 
+class RegionBody(Body):
+    region: Region
+
+
+class SiteBody(Body):
+    site: ShelterSite
+
+
 class AvailabilityBody(Body):
-    alert_id: str
+    org_id: str
     available: bool
     responded_at: Optional[str] = None
     idempotency_key: Optional[str] = None
+
+
+class AgentAddressBody(Body):
+    agent_address: str
 
 
 class ResponseBody(Body):
@@ -154,8 +168,8 @@ class AlertTriggerBody(Body):
 
 
 class OutreachBody(Body):
-    alert_id: str
     idempotency_key: Optional[str] = None
+    max_orgs: Optional[int] = None
 
 
 # ---- contract v2.0 §5.6 / §5.7 (matching, acceptance, escalation) ----

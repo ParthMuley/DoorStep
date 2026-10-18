@@ -71,16 +71,16 @@ class MatchService:
             "alert_id": alert.alert_id if alert else None,
             "event_alert_ids": self.engine.alerts.same_event_alert_ids(alert.alert_id if alert else None),
             "calamity": alert.calamity_type if alert else "UNKNOWN",
-            "orders": order_polygons, "orgs": self.store.list_organizations(),
+            "orders": order_polygons, "entries": list(self.store.partners.entries()),
             "declined_volunteers": {a.volunteer_id for a in transport_rows
                                     if a.volunteer_id and a.status in (S.DECLINED, S.CANCELED)},
             "declined_sites": {a.site_id for a in shelter_rows if a.site_id and a.status in (S.DECLINED, S.CANCELED)},
         }
 
     def _evaluate(self, case: Case, ctx: dict[str, Any]) -> tuple[list[Candidate], list[Candidate]]:
-        vols = evaluate_volunteers(ctx["profile"], case.case_id, ctx["event_alert_ids"], ctx["calamity"], ctx["orgs"],
-                                   ctx["orders"], ctx["declined_volunteers"])
-        sites = [c for c in evaluate_shelters(ctx["profile"], ctx["calamity"], ctx["orgs"], ctx["orders"])]
+        vols = evaluate_volunteers(ctx["profile"], case.case_id, ctx["event_alert_ids"], ctx["calamity"],
+                                   ctx["entries"], ctx["orders"], ctx["declined_volunteers"])
+        sites = [c for c in evaluate_shelters(ctx["profile"], ctx["calamity"], ctx["entries"], ctx["orders"])]
         for c in sites:
             if c.entity_id in ctx["declined_sites"] and c.eligible:
                 c.eligible, c.reason_codes, c.rank = False, ["ALREADY_DECLINED"], None
@@ -98,7 +98,7 @@ class MatchService:
                 "rejected": [c.view(kind) for c in cands if not c.eligible]}
 
     def _available_count(self, ctx: dict[str, Any]) -> int:
-        return sum(1 for o in ctx["orgs"] if o.approved and "TRANSPORT" in o.services for v in o.volunteers
+        return sum(1 for _r, o in ctx["entries"] if o.approved and "TRANSPORT" in o.services for v in o.volunteers
                    if v.approved and v.availability and v.availability.alert_id in ctx["event_alert_ids"]
                    and v.availability.state == "AVAILABLE")
 
@@ -162,7 +162,7 @@ class MatchService:
         else:
             order = [c for c in vols if c.eligible]
         for cand in order:
-            if self.store.reserve_volunteer(cand.org_id, cand.entity_id, case_id, ctx["event_alert_ids"]):
+            if self.store.partners.reserve_volunteer(cand.entity_id, case_id, ctx["event_alert_ids"]):
                 chosen = cand
                 break
             if select_volunteer:
@@ -176,15 +176,15 @@ class MatchService:
         site: Optional[Candidate] = None
         if shelter_row is None:
             if not profile.consents.get("DESTINATION"):
-                self.store.release_volunteer(chosen.org_id, chosen.entity_id, case_id)
+                self.store.partners.release_volunteer(chosen.entity_id, case_id)
                 raise ConsentRequired("Resident has not consented to share destination needs")
             pool = [c for c in sites if c.eligible and (not select_site or c.entity_id == select_site)]
             if select_site and not pool:
-                self.store.release_volunteer(chosen.org_id, chosen.entity_id, case_id)
+                self.store.partners.release_volunteer(chosen.entity_id, case_id)
                 raise Conflict("Selected shelter site is not eligible", code="NOT_ELIGIBLE")
             site = pool[0] if pool else None
             if site is None:
-                self.store.release_volunteer(chosen.org_id, chosen.entity_id, case_id)
+                self.store.partners.release_volunteer(chosen.entity_id, case_id)
                 return self._no_match(case, base, "NO_SHELTER", corr, key, transport_unresolved=False), False
 
         with self.db.tx():
@@ -203,7 +203,8 @@ class MatchService:
                 provider_id=chosen.org_id, service_type=TRANSPORT, provider_approved=True,
                 service_area_allowed=True, zone_rule=ZoneRule.OUTSIDE_ACTIVE_ORDER, authorization=PREAPPROVED,
                 status=S.PROPOSED, idempotency_key=key, volunteer_id=chosen.entity_id,
-                vehicle_type=chosen.extra.get("vehicle_type"), alert_id=ctx["alert_id"], eta_minutes=eta,
+                vehicle_type=chosen.extra.get("vehicle_type"), region_id=chosen.extra.get("region_id"),
+                alert_id=ctx["alert_id"], eta_minutes=eta,
                 correlation_id=corr, created_at=utc_now_iso())
             shelter = None
             if site is not None:
@@ -212,6 +213,7 @@ class MatchService:
                     provider_id=site.org_id, service_type=DESTINATION, provider_approved=True,
                     service_area_allowed=True, zone_rule=ZoneRule.OUTSIDE_ACTIVE_ORDER, authorization=PREAPPROVED,
                     status=S.PROPOSED, idempotency_key=f"{key}:shelter", site_id=site.entity_id,
+                    region_id=site.extra.get("region_id"),
                     alert_id=ctx["alert_id"], linked_assignment_id=aid, correlation_id=corr,
                     created_at=utc_now_iso())
                 transport.linked_assignment_id = shelter.assignment_id
@@ -235,10 +237,10 @@ class MatchService:
         needs_shared = [c for c in profile.needs if c not in (6,)]
         match = {
             "assignment_id": aid, "status": S.PROPOSED.value, "reserved": True,
-            "org_id": chosen.org_id, "org_agent_address": chosen.extra.get("org_agent_address"),
+            "org_id": chosen.org_id, "region_id": chosen.extra.get("region_id"),
             "volunteer_id": chosen.entity_id, "vehicle_type": chosen.extra.get("vehicle_type"),
             "shelter_org_id": shelter_org, "site_id": shelter_site,
-            "shelter_agent_address": site.extra.get("shelter_agent_address") if site else None,
+            "network_agent_address": self.store.partners.agent_address("volunteer_network"),
             "reason_codes": [c for c in chosen.reason_codes if c not in (
                 "ORG_APPROVED", "VOLUNTEER_APPROVED", "CALAMITY_TYPE_SUPPORTED", "WITHIN_SERVICE_RADIUS",
                 "AVAILABLE_FOR_THIS_ALERT", "SEATS_OK", "ROUTE_AVOIDS_ORDER_ZONES")],
@@ -298,7 +300,7 @@ class MatchService:
             self.events.append("PROVIDER_IDENTITY_REJECTED", case_id=case.case_id, correlation_id=corr,
                                data={"assignment_id": assignment_id, "org_id": org_id})
             raise Unauthorized("Organization/volunteer/site does not match this assignment", reasons=["WRONG_PROVIDER"])
-        org = self.store.get_organization(org_id)
+        org = self.store.partners.get_org(org_id)
         if not org.approved:
             raise Unauthorized("Organization is not approved", reasons=["ORG_NOT_APPROVED"])
 
@@ -320,7 +322,8 @@ class MatchService:
             if zone in BLOCKING_ZONES:  # the zone may have changed since the proposal
                 raise SafetyRejection(f"Resident zone is now {zone}", code=BLOCKING_ZONES[zone][1],
                                       reasons=[BLOCKING_ZONES[zone][0]])
-            vol = next((v for v in org.volunteers if v.volunteer_id == row.volunteer_id), None)
+            located = self.store.partners.locate_volunteer(row.volunteer_id)
+            vol = located[2] if located and located[1].org_id == org_id else None
             if vol is None or vol.reserved_case_id != case.case_id:
                 raise Conflict("Volunteer reservation for this case was lost", code="RESERVATION_LOST")
             try:
@@ -330,14 +333,14 @@ class MatchService:
             except DuplicateKeyError as exc:
                 raise Conflict("Another volunteer was already accepted", code="DUPLICATE_ACCEPTANCE") from exc
         elif accept:  # shelter confirms a bed
-            if not self.store.take_bed(org_id, row.site_id):
+            if not self.store.partners.take_bed(row.site_id):
                 raise Conflict("Shelter site has no beds left", code="NO_BEDS")
             try:
                 with self.db.tx():
                     eng._accept(row, case, corr)
                     eng._save_case(case)
             except Exception:
-                self.store.return_bed(org_id, row.site_id)
+                self.store.partners.return_bed(row.site_id)
                 raise
         else:
             next_alt = self._decline(row, case, corr)
@@ -366,7 +369,7 @@ class MatchService:
                                data={"assignment_id": row.assignment_id, "volunteer_id": row.volunteer_id,
                                      "site_id": row.site_id})
             if is_transport:
-                self.store.release_volunteer(row.provider_id, row.volunteer_id, case.case_id)
+                self.store.partners.release_volunteer(row.volunteer_id, case.case_id)
                 linked = eng._linked(row)
                 if linked and linked.status in (S.PROPOSED, S.AWAITING_PROVIDER):
                     linked.status = S.CANCELED
@@ -375,7 +378,7 @@ class MatchService:
                     eng._set_resident_status(case, R.NEEDS_ASSISTANCE, reason="volunteer canceled",
                                              correlation_id=corr)
             elif was_accepted:
-                self.store.return_bed(row.provider_id, row.site_id)
+                self.store.partners.return_bed(row.site_id)
 
             ctx = self._context(case)
             vols, sites = self._evaluate(case, ctx)

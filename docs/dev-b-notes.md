@@ -16,46 +16,42 @@ PYTHONPATH=src python -m pytest tests/unit -q
 
 Env: `SIMULATION_MODE=true` (required), `DEMO_AUTH_TOKEN`, `DOORSTEP_API_PORT`, `DOORSTEP_API_URL`, `MONGODB_URI`, `MONGODB_USERS_DB`, `MONGODB_ORGS_DB`, `USE_MONGOMOCK`. Dependencies to add to `pyproject.toml` (A owns it): `pymongo`, dev `mongomock` (plus `shapely`, `openai` for later steps).
 
-## v2 endpoints available now (B2: registration)
+## v2.1 endpoints available now (plan rev 3: location-first partners, one Volunteer Network agent)
 
-Contract v2.0 §5.2 / §5.4, responses carry `schema_version: "2.0"`:
-- `POST /residents` `{resident: {...}}`: needs codes validated, `wants_help_contact:false` forces CHECKIN off, LOW/FAILED geocode → `zone_status: UNKNOWN`.
-- `POST /organizations` `{organization: {...}}`: volunteers embedded; availability/reservations are reset at registration.
-- `POST /organizations/{org_id}/volunteers` `{volunteer: {...}}`: needs `X-Org-Agent: <org_id>`.
-- `GET /organizations`: public, sanitized (no phones, addresses or volunteer records).
-- `GET /orgs/{org_id}/volunteers?alert_id=`: needs token + `X-Org-Agent`; only that org's volunteers.
-- `POST /orgs/{org_id}/volunteers/{volunteer_id}/availability` `{alert_id, available}`: repeat-safe; stale alert → 409.
+Responses carry `schema_version: "2.0"`.
 
-The v1 flow endpoints are unchanged until the switch-over. They read the new resident documents through a temporary adapter (`services/legacy.py`).
+**Auth.** Writes need `Authorization: Bearer $DEMO_AUTH_TOKEN`. Network routes also need `X-Agent-Token: $NETWORK_AGENT_TOKEN` (local default `change-me-network-agent-token`). Network routes are `/alerts/{id}/outreach`, `/alerts/{id}/volunteers/{vid}/availability` and `/assignments/{id}/accept`. B checks every `org_id` against the volunteer or site (otherwise 403 `WRONG_ORG`).
 
-## v2 endpoints available now (B3: alerts, geofencing, outreach)
+**Partners.** `doorstep_partners`: canonical `organizations` plus `regions` (area → orgs → only their local volunteers and sites). Seed regions:
+- `la_county:east_valley`: Sarah, Joe, Maya, Tom, Rina; civic shelter;
+- `la_county:south_valley`: Lee; recovery housing;
+- `la_county:westside`: Red Cross shelter;
+- `sf:mission`: Red Cross volunteer Sam, never contacted for the LA fire.
 
-Demo loop for the Calamity agent:
-1. `POST /demo/alerts/trigger {"action":"ISSUE","preset":"ZONE_3_WILDFIRE"}` puts a WARNING zone over Maria and an ORDER zone over David into the synthetic feed.
-2. The Calamity agent polls `GET /demo/feeds/caloes` every 120 s (exact Cal OES GeoJSON) and posts it to `POST /alerts/ingest`.
-3. The ingest response lists `new_alerts`, `affected_cases`, `checkins_sent` (once per resident per alert) and `outreach_orgs`. Today that's `neighbor_sedans_demo`, `eastside_rides_demo` and `red_cross_demo`; flood-only and unapproved orgs are excluded.
-4. The Doorstep agent sends `OutreachRequest` to each listed org agent. The org agent calls `POST /orgs/{org_id}/outreach {alert_id}` (with `X-Org-Agent`), B texts its approved volunteers, and they answer via `/sim/inbound` (YES/NO).
-5. `GET /orgs/{org_id}/volunteers?alert_id=` and `GET /alerts/{alert_id}/outreach` show who's available.
+**Registration:**
+- `POST /organizations` (canonical; updates copy into every region);
+- `POST /regions` (no overlaps);
+- `POST /regions/{region_id}/orgs/{org_id}/volunteers`, `/shelter_sites` and presence. Location is checked; a wrong region → 409 that names the right one.
+- `GET /organizations`, `GET /regions/near?alert_id=|zone_id=|lat=&lon=&radius_km=` (+ `calamity_type`, `service`).
+- `POST /residents` is unchanged.
 
-Also available:
-- `GET /alerts/active`: alerts, freshness, and the awareness radius.
-- `POST /sim/outreach/{alert_id}/deadline`: unanswered volunteers become NO_REPLY.
-- `GET /cases/{id}` now includes `zone_status` and `zone_sources`.
-- Scenario C: `{"action":"FREEZE_FEED","freeze_age_minutes":30}`, then ingest. Zones go STALE and nothing is triggered.
+**Agents.** `PUT /agents/{role} {agent_address}` at startup; `GET /agents`. B returns `network_agent_address` in `/alerts/ingest` and in matches.
 
-## v2 endpoints available now (B4: matching, acceptance, escalation)
+**Loop for the agents** (scripted in `doorstep.demo.scenarios.run_scenario_{a,b,c}_v2`; `scripts/smoke_test.sh` runs v1 + v2):
+1. `POST /demo/alerts/trigger {"action":"ISSUE","preset":"ZONE_3_WILDFIRE"}`. The Calamity agent polls `GET /demo/feeds/caloes` every 120 s and posts it to `POST /alerts/ingest`. The response lists `affected_cases`, `checkins_sent`, `outreach_orgs` (with `region_ids`, nearby only) and `network_agent_address`.
+2. The Volunteer Network agent calls `POST /alerts/{alert_id}/outreach {}`. B texts the nearby orgs' approved volunteers and returns who was asked.
+3. Volunteers answer by `/sim/inbound` (YES/SI/NO), or the network agent posts `POST /alerts/{id}/volunteers/{vid}/availability {org_id, available}`. Live counts: `GET /alerts/{id}/outreach`; `POST /sim/outreach/{id}/deadline` marks the rest NO_REPLY.
+4. The resident replies and confirms needs (`/cases/{id}/responses`).
+5. `POST /matches/propose {case_id}`. Use `create_proposal:false` to preview; otherwise you get a 201 match with the volunteer reserved and a `region_id`.
+6. `POST /assignments/{id}/accept {org_id, volunteer_id | site_id, decision}` (network token). A volunteer ACCEPTED triggers "help is on the way" + an ETA estimate. DECLINED returns `next_alternate`.
+7. Pickup: the resident texts `RECOGIDO` / `PICKED UP` (or send `resident_confirmed`), then `POST /assignments/{id}/pickup {"type":"VOLUNTEER_AND_RESIDENT_CONFIRMATION","volunteer_confirmed":true}`.
+8. Arrival: `POST /assignments/{id}/arrival {"type":"SHELTER_CHECKIN","shelter_org_id","site_id","shelter_confirmed":true}`. Green; the volunteer is released.
+9. David: propose returns `ORDER_ZONE`. Then `POST /cases/{id}/escalate`, then `POST /escalations/{id}/ack` (`AUTO_ESCALATION_ACK=false` when the Escalation agent runs).
+10. Scenario C: `{"action":"FREEZE_FEED","freeze_age_minutes":30}`, then ingest. Zones go STALE and matching refuses.
 
-Full flow (scripted in `doorstep.demo.scenarios.run_scenario_{a,b,c}_v2`; `scripts/smoke_test.sh` runs v1 and v2):
-1. Alert + outreach (B3). Volunteers answer YES/NO.
-2. The resident replies and confirms needs (`POST /cases/{id}/responses`, as before).
-3. `POST /matches/propose {case_id, create_proposal:false}`: explained eligible/rejected volunteers and shelters (for "show suitable volunteers").
-4. `POST /matches/propose {case_id, idempotency_key}` → 201 match. The volunteer is reserved atomically, and the match includes `org_agent_address`, `volunteer_id`, `site_id`, `shared_with_volunteer`, `eta_estimate`.
-5. Org agents answer on the same id: `POST /assignments/{id}/accept` with `X-Org-Agent` = body `org_id`, and `volunteer_id` (transport) or `site_id` (shelter).
-   - Volunteer ACCEPTED: resident gets "help is on the way" + ETA; `pickup_details` go only to that org.
-   - DECLINED: `next_alternate` names the next eligible volunteer; propose again with `select`.
-6. Pickup: `POST /assignments/{id}/pickup` with `{"type":"VOLUNTEER_AND_RESIDENT_CONFIRMATION","volunteer_confirmed":true,"resident_confirmed":true}`.
-7. Arrival: `POST /assignments/{id}/arrival` with `{"type":"SHELTER_CHECKIN","shelter_org_id":…,"site_id":…,"shelter_confirmed":true}`. Green; the volunteer is released.
-8. Order zone (David): propose returns `no_match_reason: ORDER_ZONE`. Then `POST /cases/{id}/escalate {reason:"ACTIVE_EVACUATION_ORDER_ZONE"}` → `REQUESTED`, and the Escalation agent → `POST /escalations/{id}/ack {status:"ACKNOWLEDGED_REQUEST_ONLY"}`. Set `AUTO_ESCALATION_ACK=false` when the agent runs (default `true` auto-acks for local runs).
+**Removed (v2.0):** `/organizations/{id}/volunteers`, `/orgs/{id}/volunteers`, `/orgs/{id}/volunteers/{vid}/availability`, `/orgs/{id}/outreach`, `X-Org-Agent`. A's stand-ins for these should switch to the v2.1 routes above.
+
+**Request for A (`.env.example`):** add `NETWORK_AGENT_TOKEN=` and `MONGODB_PARTNERS_DB=doorstep_partners`.
 
 ## Contract v1.0 conformance
 

@@ -23,6 +23,8 @@ def normalize(text: str) -> str:
 _INTENT_NUMBERS = {"1": ResponseIntent.NEED_HELP, "2": ResponseIntent.HAS_PLAN,
                    "3": ResponseIntent.ALREADY_LEFT, "4": ResponseIntent.CALL_ME}
 
+_PICKUP_PHRASES = ["picked up", "pickup done", "recogido", "recogida", "ya me recogieron", "me recogieron"]
+
 _INTENT_PHRASES = [
     (ResponseIntent.CALL_ME, ["call me", "llamame", "llamenme", "llamar"]),
     (ResponseIntent.ALREADY_LEFT, ["already left", "ya sali", "ya me fui", "ya me sali"]),
@@ -70,7 +72,9 @@ def extract(text: str, language: str = "en") -> ParsedResponse:
     intent = ResponseIntent.UNPARSED
     first = norm.split(" ")[0] if norm else ""
     first = re.sub(r"[^a-z0-9]", "", first)
-    if first in _INTENT_NUMBERS:
+    if any(re.search(rf"\b{re.escape(p)}\b", norm) for p in _PICKUP_PHRASES):
+        intent = ResponseIntent.PICKUP_CONFIRMED
+    elif first in _INTENT_NUMBERS:
         intent = _INTENT_NUMBERS[first]
     elif norm.rstrip(".!") in _YES or (words and words <= _YES):
         intent = ResponseIntent.CONFIRM_YES

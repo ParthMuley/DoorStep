@@ -26,7 +26,6 @@ from doorstep.models import (
     Case,
     CommunicationStatus as C,
     FeedState,
-    Organization,
     ResidentProfile,
     SourceType,
     Verification,
@@ -327,6 +326,7 @@ class AlertService:
             "new_alerts": [self._alert_brief(a) for a in new], "changed_alerts": [self._alert_brief(a) for a in changed],
             "canceled_alerts": canceled, "pending_cancellation": pending, "affected_cases": affected,
             "checkins_sent": checkins, "outreach_orgs": outreach,
+            "network_agent_address": self.store.partners.agent_address("volunteer_network"),
             "notify_coordinator": bool(new or changed or canceled or checkins),
         }
         return self._finish(key, result)
@@ -405,28 +405,92 @@ class AlertService:
         return msg.message_id
 
     # ------------------------------------------------------- outreach orgs
-    def _outreach_orgs(self, alerts: list[ZoneAlert]) -> list[dict[str, Any]]:
-        """Closest approved TRANSPORT orgs that handle the calamity type, within their service radius."""
+    def _max_radius_km(self) -> float:
+        radii = [o.service_radius_km for o in self.store.partners.list_orgs() if o.approved]
+        return max(radii) if radii else 0.0
+
+    def select_outreach(self, alert: ZoneAlert, max_orgs: Optional[int] = None) -> list[dict[str, Any]]:
+        """Plan decision 6: regions nearest the zone first; approved TRANSPORT orgs handling the calamity type
+        whose region is within the org's own service radius; closest ``max_orgs`` orgs. An org's far-away
+        regions (e.g. SF for an LA fire) are never included."""
+        geom = geo.polygon(alert.geometry)
+        if geom is None:
+            return []
         best: dict[str, dict[str, Any]] = {}
-        for a in alerts:
-            geom = geo.polygon(a.geometry)
-            if geom is None:
-                continue
-            for org in self.store.list_organizations():
-                if not org.approved or "TRANSPORT" not in org.services:
+        for region, km in self.store.partners.regions_near(geom, self._max_radius_km()):
+            for entry in region.orgs:
+                if not entry.approved or "TRANSPORT" not in entry.services or not entry.volunteers:
                     continue
-                if a.calamity_type != "UNKNOWN" and "ANY" not in org.calamity_types \
-                        and a.calamity_type not in org.calamity_types:
+                if alert.calamity_type != "UNKNOWN" and "ANY" not in entry.calamity_types \
+                        and alert.calamity_type not in entry.calamity_types:
                     continue
-                km = round(geo.distance_to_km(geom, org.location.lat, org.location.lon), 1)
-                if km > org.service_radius_km:
+                if km > entry.service_radius_km:
                     continue
-                if org.org_id not in best or km < best[org.org_id]["distance_km"]:
-                    best[org.org_id] = {"org_id": org.org_id, "name": org.name, "agent_address": org.agent_address,
-                                        "distance_km": km, "calamity_types": org.calamity_types,
-                                        "alert_id": a.alert_id}
+                rec = best.setdefault(entry.org_id, {"org_id": entry.org_id, "name": entry.name, "region_ids": [],
+                                                     "distance_km": km, "calamity_types": entry.calamity_types,
+                                                     "alert_id": alert.alert_id})
+                rec["region_ids"].append(region.region_id)
+                rec["distance_km"] = min(rec["distance_km"], km)
         ranked = sorted(best.values(), key=lambda o: (o["distance_km"], o["org_id"]))
+        return ranked[: max_orgs or self.outreach_max_orgs()]
+
+    def _outreach_orgs(self, alerts: list[ZoneAlert]) -> list[dict[str, Any]]:
+        merged: dict[str, dict[str, Any]] = {}
+        for a in alerts:
+            for rec in self.select_outreach(a, max_orgs=10_000):
+                cur = merged.get(rec["org_id"])
+                if cur is None or rec["distance_km"] < cur["distance_km"]:
+                    merged[rec["org_id"]] = {**rec, "region_ids": sorted(set(rec["region_ids"] + (cur["region_ids"] if cur else [])))}
+                else:
+                    cur["region_ids"] = sorted(set(cur["region_ids"] + rec["region_ids"]))
+        ranked = sorted(merged.values(), key=lambda o: (o["distance_km"], o["org_id"]))
         return ranked[: self.outreach_max_orgs()]
+
+    def regions_near_view(self, *, alert_id: Optional[str] = None, zone_id: Optional[str] = None,
+                          lat: Optional[float] = None, lon: Optional[float] = None,
+                          radius_km: Optional[float] = None, calamity_type: Optional[str] = None,
+                          service: Optional[str] = None) -> dict[str, Any]:
+        origin_info: dict[str, Any] = {}
+        alert = None
+        if alert_id:
+            alert = self.get_alert(alert_id)
+        elif zone_id:
+            alert = next((a for a in self._alerts({"zone_id": zone_id, "active": True})), None)
+            if alert is None:
+                raise NotFound(f"No active alert for zone {zone_id!r}")
+        if alert is not None:
+            geom = geo.polygon(alert.geometry)
+            origin_info = {"alert_id": alert.alert_id, "zone_id": alert.zone_id}
+            calamity_type = calamity_type or alert.calamity_type
+            max_km = radius_km or self._max_radius_km()
+        elif lat is not None and lon is not None:
+            from shapely.geometry import Point
+            geom = Point(lon, lat)
+            origin_info = {"lat": lat, "lon": lon}
+            max_km = radius_km or self._max_radius_km()
+        else:
+            raise Conflict("Provide alert_id, zone_id, or lat+lon", code="VALIDATION_ERROR")
+        current_alerts = self.same_event_alert_ids(alert.alert_id) if alert is not None else set()
+        regions = []
+        for region, km in self.store.partners.regions_near(geom, max_km):
+            orgs = []
+            for e in region.orgs:
+                if service and service not in e.services:
+                    continue
+                if calamity_type and calamity_type != "UNKNOWN" and "ANY" not in e.calamity_types \
+                        and calamity_type not in e.calamity_types:
+                    continue
+                orgs.append({"org_id": e.org_id, "name": e.name, "approved": e.approved,
+                             "calamity_types": e.calamity_types, "services": e.services,
+                             "within_service_radius": km <= e.service_radius_km,
+                             "volunteer_count": len(e.volunteers),
+                             "approved_volunteers": sum(1 for v in e.volunteers if v.approved),
+                             "available_for_alert": sum(1 for v in e.volunteers if v.availability
+                                                        and v.availability.alert_id in current_alerts
+                                                        and v.availability.state == "AVAILABLE"),
+                             "shelter_sites": len(e.shelter_sites)})
+            regions.append({"region_id": region.region_id, "label": region.label, "distance_km": km, "orgs": orgs})
+        return {"origin": origin_info, "max_km": max_km, "regions": regions}
 
     # -------------------------------------------------------- active view
     def active_view(self) -> dict[str, Any]:
@@ -455,95 +519,117 @@ class AlertService:
         return {"alerts": alerts, "awareness": awareness, "feeds": feeds, "generated_at": utc_now_iso()}
 
     # ------------------------------------------------- volunteer outreach
-    def start_outreach(self, org_id: str, alert_id: str, idempotency_key: Optional[str] = None,
+    def start_outreach(self, alert_id: str, idempotency_key: Optional[str] = None, max_orgs: Optional[int] = None,
                        correlation_id: str = "") -> dict[str, Any]:
+        """Volunteer Network agent: ask the nearest suitable orgs' volunteers (in the selected regions only)."""
         alert = self.get_alert(alert_id)
         if not alert.is_simulation:
             raise Conflict("Live (display-only) alerts never trigger outreach", code="NOT_SIMULATED")
         if not alert.active:
             raise Conflict("Alert is no longer active", code="ALERT_NOT_ACTIVE")
-        org = self.store.get_organization(org_id)
-        if not org.approved:
-            raise Conflict("Organization is not approved by the partner network", code="ORG_NOT_APPROVED")
-        key = idempotency_key or f"{alert_id}:outreach:{org_id}"
+        key = idempotency_key or f"{alert_id}:outreach"
         prior = self.db.coll("provider_events").find_one({"_id": key})
         if prior:
             return {**_strip(prior).get("result", {}), "duplicate": True}
 
-        asked, skipped = [], []
+        partners = self.store.partners
+        selected = self.select_outreach(alert, max_orgs)
+        orgs_out = []
         with self.db.tx():
-            for v in org.volunteers:
-                if not v.approved:
-                    skipped.append({"volunteer_id": v.volunteer_id, "reason": "VOLUNTEER_NOT_APPROVED"})
-                    continue
-                self.store.set_volunteer_availability(
-                    org_id, v.volunteer_id, VolunteerAvailability(alert_id=alert_id, state=AvailabilityState.ASKED))
-                body = templates.render("volunteer_outreach", "en", calamity=alert.calamity_type.lower(),
-                                        zone=alert.zone_name or alert.zone_id, org=org.name)
-                msg = self.engine.sim.send(case_id=None, recipient=v.phone, body=body, language="en",
-                                           template_id="volunteer_outreach", correlation_id=correlation_id)
-                asked.append({"volunteer_id": v.volunteer_id, "message_id": msg.message_id})
-            result = {"org_id": org_id, "alert_id": alert_id, "asked": asked, "skipped": skipped}
-            self.store.record_provider_event(key, {"type": "VOLUNTEER_OUTREACH", "org_id": org_id,
-                                                   "alert_id": alert_id, "result": result})
+            for rec in selected:
+                asked, skipped = [], []
+                for region_id in rec["region_ids"]:
+                    region = partners.get_region(region_id)
+                    entry = next(o for o in region.orgs if o.org_id == rec["org_id"])
+                    targets = [v for v in entry.volunteers if v.approved]
+                    skipped += [{"volunteer_id": v.volunteer_id, "reason": "VOLUNTEER_NOT_APPROVED"}
+                                for v in entry.volunteers if not v.approved]
+                    ids = {v.volunteer_id for v in targets}
+
+                    def fn(r, ids=ids, org_id=rec["org_id"]):
+                        e = next(o for o in r.orgs if o.org_id == org_id)
+                        for v in e.volunteers:
+                            if v.volunteer_id in ids:
+                                v.availability = VolunteerAvailability(alert_id=alert_id, state=AvailabilityState.ASKED)
+                        return bool(ids), None
+                    partners.mutate_region(region_id, fn)
+                    for v in targets:
+                        body = templates.render("volunteer_outreach", "en", calamity=alert.calamity_type.lower(),
+                                                zone=alert.zone_name or alert.zone_id, org=entry.name)
+                        msg = self.engine.sim.send(case_id=None, recipient=v.phone, body=body, language="en",
+                                                   template_id="volunteer_outreach", correlation_id=correlation_id)
+                        asked.append({"volunteer_id": v.volunteer_id, "message_id": msg.message_id})
+                orgs_out.append({"org_id": rec["org_id"], "region_ids": rec["region_ids"],
+                                 "distance_km": rec["distance_km"], "asked": asked, "skipped": skipped})
+            result = {"alert_id": alert_id, "orgs": orgs_out}
+            self.store.record_provider_event(key, {"type": "VOLUNTEER_OUTREACH", "alert_id": alert_id, "result": result})
             self.events.append("VOLUNTEER_OUTREACH_SENT", case_id=None, correlation_id=correlation_id,
-                               data={"org_id": org_id, "alert_id": alert_id, "asked": len(asked),
-                                     "skipped": len(skipped)})
+                               data={"alert_id": alert_id, "orgs": [o["org_id"] for o in orgs_out],
+                                     "asked": sum(len(o["asked"]) for o in orgs_out)})
         return {**result, "duplicate": False}
 
-    def volunteer_by_phone(self, phone: str) -> Optional[tuple[Organization, Any]]:
-        d = self.db.coll("organizations").find_one({"volunteers.phone": phone})
-        if not d:
-            return None
-        org = Organization.model_validate(_strip(d))
-        return org, next(v for v in org.volunteers if v.phone == phone)
+    def volunteer_by_phone(self, phone: str):
+        return self.store.partners.locate_volunteer_by_phone(phone)
 
-    def volunteer_reply(self, org: Organization, volunteer: Any, text: str, external_id: Optional[str],
-                        correlation_id: str = "") -> dict[str, Any]:
+    def volunteer_reply(self, found, text: str, external_id: Optional[str], correlation_id: str = "") -> dict[str, Any]:
         """A volunteer answers the outreach SMS (YES/SI or NO)."""
+        region, entry, volunteer = found
         if volunteer.availability is None:
             raise Conflict("This volunteer has not been asked about any alert", code="NOT_ASKED")
         intent = intake.extract(text, "en").intent.value
         if intent not in ("CONFIRM_YES", "CONFIRM_NO"):
             raise Conflict("Reply YES or NO", code="UNPARSED_REPLY")
-        available = intent == "CONFIRM_YES"
         alert_id = volunteer.availability.alert_id
         key = f"{alert_id}:sms:{external_id}" if external_id else None
-        out = self.engine.registry.record_availability(org.org_id, volunteer.volunteer_id, alert_id=alert_id,
-                                                       available=available, idempotency_key=key,
+        out = self.engine.registry.record_availability(alert_id, volunteer.volunteer_id, org_id=entry.org_id,
+                                                       available=intent == "CONFIRM_YES", idempotency_key=key,
                                                        correlation_id=correlation_id)
-        return {**out, "org_id": org.org_id, "sender_role": "volunteer"}
+        return {**out, "region_id": region.region_id, "sender_role": "volunteer"}
 
     def outreach_deadline(self, alert_id: str) -> dict[str, Any]:
         """Unanswered volunteers become NO_REPLY (never treated as available)."""
-        marked = []
+        partners = self.store.partners
+        marked: list[str] = []
         with self.db.tx():
-            for org in self.store.list_organizations():
-                for v in org.volunteers:
-                    a = v.availability
-                    if a and a.alert_id == alert_id and a.state == AvailabilityState.ASKED.value:
-                        self.store.set_volunteer_availability(org.org_id, v.volunteer_id, VolunteerAvailability(
-                            alert_id=alert_id, state=AvailabilityState.NO_REPLY, responded_at=None))
-                        marked.append(v.volunteer_id)
+            for region in partners.list_regions():
+                def fn(r):
+                    hit = []
+                    for e in r.orgs:
+                        for v in e.volunteers:
+                            a = v.availability
+                            if a and a.alert_id == alert_id and a.state == AvailabilityState.ASKED.value:
+                                v.availability = VolunteerAvailability(alert_id=alert_id,
+                                                                       state=AvailabilityState.NO_REPLY)
+                                hit.append(v.volunteer_id)
+                    return bool(hit), hit
+                marked += partners.mutate_region(region.region_id, fn)
             self.events.append("VOLUNTEER_OUTREACH_DEADLINE", case_id=None,
                                data={"alert_id": alert_id, "no_reply": len(marked)})
         return {"alert_id": alert_id, "marked_no_reply": marked}
 
     def outreach_summary(self, alert_id: str) -> dict[str, Any]:
+        """Live per-org counts for an alert (updates as answers arrive)."""
         alert = self.get_alert(alert_id)
         geom = geo.polygon(alert.geometry)
-        orgs = []
-        for org in self.store.list_organizations():
-            states = [v.availability.state for v in org.volunteers
-                      if v.availability and v.availability.alert_id == alert_id]
-            if not states:
-                continue
-            orgs.append({"org_id": org.org_id, "name": org.name,
-                         "distance_km": round(geo.distance_to_km(geom, org.location.lat, org.location.lon), 1)
-                         if geom is not None else None,
-                         "asked": len(states), "available": states.count(AvailabilityState.AVAILABLE.value),
-                         "unavailable": states.count(AvailabilityState.UNAVAILABLE.value),
-                         "no_reply": states.count(AvailabilityState.NO_REPLY.value),
-                         "awaiting": states.count(AvailabilityState.ASKED.value)})
+        orgs: dict[str, dict[str, Any]] = {}
+        for region in self.store.partners.list_regions():
+            from shapely.geometry import shape as _shape
+            km = round(geo.geometry_distance_km(geom, _shape(region.area)), 1) if geom is not None else None
+            for e in region.orgs:
+                states = [v.availability.state for v in e.volunteers
+                          if v.availability and v.availability.alert_id == alert_id]
+                if not states:
+                    continue
+                rec = orgs.setdefault(e.org_id, {"org_id": e.org_id, "name": e.name, "region_ids": [],
+                                                 "distance_km": km, "asked": 0, "awaiting": 0, "available": 0,
+                                                 "unavailable": 0, "no_reply": 0})
+                rec["region_ids"].append(region.region_id)
+                if km is not None and (rec["distance_km"] is None or km < rec["distance_km"]):
+                    rec["distance_km"] = km
+                rec["asked"] += len(states)
+                rec["awaiting"] += states.count(AvailabilityState.ASKED.value)
+                rec["available"] += states.count(AvailabilityState.AVAILABLE.value)
+                rec["unavailable"] += states.count(AvailabilityState.UNAVAILABLE.value)
+                rec["no_reply"] += states.count(AvailabilityState.NO_REPLY.value)
         return {"alert_id": alert_id, "calamity_type": alert.calamity_type,
-                "orgs": sorted(orgs, key=lambda o: (o["distance_km"] is None, o["distance_km"] or 0))}
+                "orgs": sorted(orgs.values(), key=lambda o: (o["distance_km"] is None, o["distance_km"] or 0, o["org_id"]))}

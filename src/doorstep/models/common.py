@@ -112,6 +112,7 @@ class ResponseIntent(str, Enum):
     CALL_ME = "CALL_ME"
     CONFIRM_YES = "CONFIRM_YES"
     CONFIRM_NO = "CONFIRM_NO"
+    PICKUP_CONFIRMED = "PICKUP_CONFIRMED"  # resident/caregiver texts PICKED UP / RECOGIDO
     UNPARSED = "UNPARSED"
 
 

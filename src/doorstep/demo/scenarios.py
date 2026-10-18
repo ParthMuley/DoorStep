@@ -184,8 +184,7 @@ def _ok2(resp, *expected: int) -> dict[str, Any]:
     return body
 
 
-def _org(org_id: str) -> dict[str, str]:
-    return {"X-Org-Agent": org_id}
+NETWORK = {"X-Agent-Token": os.environ.get("NETWORK_AGENT_TOKEN") or "change-me-network-agent-token"}
 
 
 def start_alert_v2(client, log=print) -> dict[str, Any]:
@@ -198,6 +197,8 @@ def start_alert_v2(client, log=print) -> dict[str, Any]:
     _check(len(poll["checkins_sent"]) == 2, "one check-in per affected resident")
     orgs = [o["org_id"] for o in poll["outreach_orgs"]]
     _check("flood_only_demo" not in orgs and "unlisted_vans_demo" not in orgs, "only fire-capable approved orgs")
+    red_cross = next(o for o in poll["outreach_orgs"] if o["org_id"] == "red_cross_demo")
+    _check("sf:mission" not in red_cross["region_ids"], "far-away regions (SF) are never contacted for an LA fire")
     log(f"V2-1 alert ingested: zones={zones}, outreach orgs={orgs}")
     return poll
 
@@ -205,12 +206,13 @@ def start_alert_v2(client, log=print) -> dict[str, Any]:
 def run_scenario_a_v2(client, log=print) -> dict[str, Any]:
     poll = start_alert_v2(client, log)
     alert_id = next(a["alert_id"] for a in poll["new_alerts"] if a["status"] == "WARNING")
-    for org in [o["org_id"] for o in poll["outreach_orgs"]]:
-        _ok2(client.post(f"/orgs/{org}/outreach", json={"alert_id": alert_id}, headers=_org(org)))
+    outreach = _ok2(client.post(f"/alerts/{alert_id}/outreach", json={}, headers=NETWORK))
+    asked = sorted(a["volunteer_id"] for o in outreach["orgs"] for a in o["asked"])
+    _check("volunteer_sam" not in asked, "SF volunteer never asked")
     replies = {"sim_phone_sarah": "YES", "sim_phone_joe": "YES", "sim_phone_maya": "NO", "sim_phone_lee": "SI"}
     for phone, text in replies.items():
         _ok(client.post("/sim/inbound", json={"sender": phone, "text": text, "external_id": f"v2-{phone}"}))
-    log("V2-2 volunteers asked by their own orgs; Sarah/Joe/Lee yes, Maya no")
+    log(f"V2-2 Volunteer Network asked nearby volunteers {asked}; Sarah/Joe/Lee yes, Maya no")
 
     _ok(client.post(f"/cases/{MARIA}/responses", json={"text": MARIA_SPANISH_REPLY, "language": "es",
                                                        "sender": seed.MARIA_SENDER, "external_id": "v2-maria-1"}))
@@ -235,26 +237,27 @@ def run_scenario_a_v2(client, log=print) -> dict[str, Any]:
     aid = match["assignment_id"]
     log(f"V2-5 match {aid}: Sarah ({match['vehicle_type']}) + {match['site_id']}, ETA ~{match['eta_estimate']['minutes']} min")
 
-    acc = _ok2(client.post(f"/assignments/{aid}/accept", headers=_org("eastside_rides_demo"),
+    acc = _ok2(client.post(f"/assignments/{aid}/accept", headers=NETWORK,
                            json={"org_id": "eastside_rides_demo", "volunteer_id": "volunteer_sarah",
                                  "decision": "ACCEPTED"}))
     _check(acc["resident_status"] == "PROVIDER_ACCEPTED" and acc["help_on_the_way_sent"], "help on the way sent")
     _check(acc["pickup_details"]["pickup_point"].startswith("SYNTHETIC"), "pickup point only after acceptance")
     _check(acc["confirmed_pickup_at"] is None and acc["confirmed_arrival_at"] is None, "acceptance != pickup")
-    _ok2(client.post(f"/assignments/{aid}/accept", headers=_org("civic_shelter_demo"),
+    _ok2(client.post(f"/assignments/{aid}/accept", headers=NETWORK,
                      json={"org_id": "civic_shelter_demo", "site_id": "dest_center_a", "decision": "ACCEPTED"}))
     log("V2-6 volunteer accepted (resident told help is on the way, ETA is an estimate); shelter bed confirmed")
 
+    # Resident side by SMS (Maria texts RECOGIDO), volunteer side from the PickupReport.
+    _ok(client.post("/sim/inbound", json={"sender": seed.MARIA_SENDER, "text": "RECOGIDO", "external_id": "v2-pickup"}))
     p = _ok(client.post(f"/assignments/{aid}/pickup", json={"evidence": {
-        "type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True, "resident_confirmed": True,
-        "code_verified": True, "confirmations": [{"party": "volunteer", "party_id": "volunteer_sarah"},
-                                                 {"party": "resident", "party_id": "resident_001"}]}}))
+        "type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True, "code_verified": True,
+        "confirmations": [{"party": "volunteer", "party_id": "volunteer_sarah"}]}}))
     _check(p["resident_status"] == "PICKUP_CONFIRMED" and p["confirmed_arrival_at"] is None, "pickup != arrival")
     a = _ok(client.post(f"/assignments/{aid}/arrival", json={"evidence": {
         "type": "SHELTER_CHECKIN", "shelter_org_id": "civic_shelter_demo", "site_id": "dest_center_a",
         "shelter_confirmed": True}}))
     _check(a["resident_status"] == "ARRIVAL_CONFIRMED", "arrival -> green")
-    log("V2-7 pickup then shelter check-in -> green")
+    log("V2-7 pickup (Maria's RECOGIDO + volunteer report) then shelter check-in -> green")
 
     final = _ok(client.get(f"/cases/{MARIA}"))
     _check(final["map"]["color"] == "green" and final["evidence"]["timeline_replay_matches_status"], "green + replay")
