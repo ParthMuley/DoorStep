@@ -470,7 +470,20 @@ B matches approved orgs whose `recovery_services` include each help type, neares
   **B sets `state`; the agent never does:**
   - `OFFICIAL_SIMULATION` + CLOSED → `OFFICIAL_CONFIRMED`; `NEWS` / `REAL_WORLD_CONTEXT` → `UNVERIFIED_REPORT`;
   - contradictory active claims about one segment → `CONFLICTING`; expired or lifted → `EXPIRED`;
-  - a gazetteer maps road names to segments; unmapped names are shown but never used for routing.
+  - a gazetteer maps road names (and aliases, e.g. "Ridge Avenue") to segments; unmapped names are shown but never used for routing.
+
+  **Exact state rules** (over a road's unexpired claims; one closure record per road, merging all sources):
+
+  | Claims | State | Blocks routes? |
+  |---|---|---|
+  | any official CLOSED/RESTRICTED | `OFFICIAL_CONFIRMED` (news saying OPEN is counted in `conflicting_reports`) | yes (if the road is mapped) |
+  | official OPEN (lifted) + news CLOSED | `CONFLICTING` | no, caution |
+  | only news, all CLOSED/RESTRICTED | `UNVERIFIED_REPORT` | no, caution |
+  | only news, disagreeing | `CONFLICTING` | no, caution |
+  | only news, all OPEN | `UNVERIFIED_REPORT` (claimed OPEN, never "safe") | no |
+  | nothing active, or only an official OPEN | `EXPIRED` | no |
+
+  `REAL_WORLD_CONTEXT` items get their own `display_only` records: never mapped, never a block, never a caution. Repeating the same `source_id` + `source_item_id` replaces that claim.
 
   → `{"accepted":[{"closure_id":"closure_002","state":"UNVERIFIED_REPORT","segment_id":"seg_canyon_rd"}],"rejected":[],"new_official_closures":[],"notify_coordinator":true}`
 - **`GET /closures`** → closures with `state, claimed_status, used_for_routing, sources[{source_type, url, published_at, headline}], expires_at`, plus `"note":"No report does not mean a road is open."`
@@ -489,7 +502,7 @@ B matches approved orgs whose `recovery_services` include each help type, neares
  "cautions":[{"closure_id":"closure_002","state":"UNVERIFIED_REPORT","road_name":"Canyon Rd","geometry":{…}}],
  "max_avoid_areas":250,"data_as_of":"…","label":"ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"}
 ```
-Refused → 409 `ROUTE_REFUSED`, `reasons` ∈ `ORDER_ZONE` (a stop is inside an order) `| ZONE_STALE | ZONE_UNKNOWN | TOO_MANY_AVOID_AREAS | ASSIGNMENT_NOT_ACCEPTED`. B refuses rather than truncate. Closure lines are buffered into polygons by B.
+Refused → 409 `ROUTE_REFUSED`, `reasons` ∈ `ORDER_ZONE` (a stop is inside an order) `| ZONE_STALE | ZONE_UNKNOWN | TOO_MANY_AVOID_AREAS | ASSIGNMENT_NOT_ACCEPTED`. B refuses rather than truncate (`ROUTE_MAX_AVOID_AREAS`, default 250, HERE's limit). Closure lines are buffered into polygons by B (~30 m each side). The refusal is recorded on the case timeline. The stops are the volunteer's location, the resident's pickup point and the accepted (or proposed) shelter site.
 
 **`POST /routes/previews`** (token):
 `{"route_request_id":"route_001","provider":"HERE","polyline":{"type":"LineString","coordinates":[…]},"distance_m":9800,"duration_s":1080,"provider_notices":[],"computed_at":"…","idempotency_key":"route_001:preview"}`
@@ -497,6 +510,8 @@ Refused → 409 `ROUTE_REFUSED`, `reasons` ∈ `ORDER_ZONE` (a stop is inside an
 → `{"route_preview_id":"rprev_001","status":"ILLUSTRATIVE_ONLY","crosses":[],"cautions_on_path":["closure_002"],"eta":{"minutes":18,"label":"Illustrative estimate, not a guarantee"},"label":"ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"}`
 - `REFUSED` if the polyline intersects any ORDER polygon or official closure (listed in `crosses`), or if data went stale.
 - On `ILLUSTRATIVE_ONLY`, B updates the case ETA (still an estimate).
+- **Re-checked against current data:** an order zone or official closure that appeared after the constraints were issued still refuses the line. A stale zone → `REFUSED` (`ZONE_STALE`). HERE notices mentioning a violated avoid area → `REFUSED`. A preview on a refused route request → 409 `ROUTE_REFUSED`.
+- `GET /cases/{id}` shows the latest `route: {route_preview_id, status, refusal_reason}`.
 - Never described as safe. Directions go to the volunteer's org agent only.
 
 ### 5.11 Card data
@@ -629,7 +644,7 @@ Atomic patterns (single region document):
 | Westside | `red_cross_demo` → site `rc_shelter_1` (features `[4,5,6]`, 30 beds) |
 | SF Mission | `red_cross_demo` → `volunteer_sam` (wheelchair van `[1,2,4]`), present to prove a far region is never contacted |
 | Alert presets | `ZONE_3_WILDFIRE` (WARNING over Maria, ORDER over David, awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER` |
-| Closures | official `Ridge Ave` (blocks Sector B ↔ Zone 4), news report `Canyon Rd` (unverified) |
+| Closures | synthetic feeds at reset: official `Ridge Ave` CLOSED (6 h), news report about `Canyon Rd`. Nothing is ingested until the News agent posts them. Fictional roads: `seg_ridge_ave`, `seg_canyon_rd`, `seg_valley_blvd`, `seg_civic_way` (`src/doorstep/demo/roads.py`) |
 
 Coordinates and polygons are fictional, defined in `src/doorstep/demo/seed.py`. Tests include a resident point exactly on a polygon edge.
 

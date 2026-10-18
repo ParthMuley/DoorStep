@@ -77,6 +77,21 @@ def synthetic_caloes_feed(service: DoorstepService = Depends(svc)):
     return service.alerts.feed.render_caloes()
 
 
+@router.get("/demo/feeds/news")
+def synthetic_news_feed(service: DoorstepService = Depends(svc)):
+    return service.closures.feed_news()
+
+
+@router.get("/demo/feeds/closures")
+def synthetic_official_closures_feed(service: DoorstepService = Depends(svc)):
+    return service.closures.feed_official()
+
+
+@router.get("/closures")
+def list_closures(service: DoorstepService = Depends(svc)):
+    return out(service.closures.list_view(), version=V2)
+
+
 @router.get("/regions/near")
 def regions_near(alert_id: Optional[str] = None, zone_id: Optional[str] = None, lat: Optional[float] = None,
                  lon: Optional[float] = None, radius_km: Optional[float] = None, calamity_type: Optional[str] = None,
@@ -284,6 +299,39 @@ def alert_outreach_start(alert_id: str, body: s.OutreachBody, corr: Optional[str
 @write.post("/sim/outreach/{alert_id}/deadline")
 def sim_outreach_deadline(alert_id: str, service: DoorstepService = Depends(svc)):
     return out(service.alerts.outreach_deadline(alert_id), version=V2)
+
+
+@write.post("/demo/closures/trigger")
+def demo_closures_trigger(body: s.ClosureTriggerBody, service: DoorstepService = Depends(svc)):
+    return out(service.closures.trigger(body.action, road_name=body.road_name, status=body.status,
+                                        headline=body.headline, body=body.body,
+                                        expires_in_minutes=body.expires_in_minutes), version=V2)
+
+
+@write.post("/closures/ingest")
+def closures_ingest(body: s.ClosureIngestBody, corr: Optional[str] = Depends(correlation_header),
+                    service: DoorstepService = Depends(svc)):
+    return out(service.closures.ingest(source_id=body.source.source_id, source_type=body.source.source_type,
+                                       url=body.source.url, fetched_at=body.source.fetched_at,
+                                       items=[i.model_dump() for i in body.items],
+                                       idempotency_key=body.idempotency_key,
+                                       correlation_id=pick(corr, body) or ""), version=V2)
+
+
+@write.post("/routes/constraints")
+def route_constraints(body: s.RouteConstraintsBody, corr: Optional[str] = Depends(correlation_header),
+                      service: DoorstepService = Depends(svc)):
+    return out(service.routes.constraints(body.assignment_id, idempotency_key=body.idempotency_key,
+                                          correlation_id=pick(corr, body)), version=V2)
+
+
+@write.post("/routes/previews")
+def route_previews(body: s.RoutePreviewBody, corr: Optional[str] = Depends(correlation_header),
+                   service: DoorstepService = Depends(svc)):
+    return out(service.routes.preview(body.route_request_id, provider=body.provider, polyline=body.polyline,
+                                      distance_m=body.distance_m, duration_s=body.duration_s,
+                                      provider_notices=body.provider_notices, idempotency_key=body.idempotency_key,
+                                      correlation_id=pick(corr, body)), version=V2)
 
 
 @write.post("/cases/{case_id}/recovery")

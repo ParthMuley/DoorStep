@@ -112,6 +112,62 @@ class RecoveryBody(Body):
     idempotency_key: Optional[str] = None
 
 
+class ClosureTriggerBody(Body):
+    action: Literal["PUBLISH_OFFICIAL", "LIFT_OFFICIAL", "PUBLISH_NEWS"]
+    road_name: str
+    status: str = "CLOSED"
+    headline: Optional[str] = None
+    body: Optional[str] = None
+    expires_in_minutes: int = 360
+
+
+class ClosureSource(DoorstepModel):
+    source_id: str
+    source_type: Literal["OFFICIAL_SIMULATION", "NEWS", "REAL_WORLD_CONTEXT"]
+    url: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class ClosureCandidate(DoorstepModel):
+    road_name: Optional[str] = None
+    claimed_status: Optional[str] = None
+    location_text: Optional[str] = None
+
+
+class ClosureItem(DoorstepModel):
+    source_item_id: str
+    published_at: Optional[str] = None
+    updated_at: Optional[str] = None
+    expires_at: Optional[str] = None
+    url: Optional[str] = None
+    headline: Optional[str] = None
+    raw_text: Optional[str] = None
+    extraction_method: Literal["STRUCTURED_FEED", "ASI_ONE_EXTRACTION"] = "STRUCTURED_FEED"
+    candidate: ClosureCandidate
+
+
+class ClosureIngestBody(Body):
+    source: ClosureSource
+    items: list[ClosureItem]
+    idempotency_key: Optional[str] = None
+
+
+class RouteConstraintsBody(Body):
+    assignment_id: str
+    idempotency_key: Optional[str] = None
+
+
+class RoutePreviewBody(Body):
+    route_request_id: str
+    provider: str = "HERE"
+    polyline: Optional[dict[str, Any]] = None
+    distance_m: Optional[float] = None
+    duration_s: Optional[float] = None
+    provider_notices: list[Any] = []
+    computed_at: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
 class RecoveryV2Body(Body):
     consent: RecoveryConsent
     help_types: list[str]

@@ -62,6 +62,8 @@ from .registry import RegistryService
 from .alerts import AlertService
 from .matching_v2 import MatchService
 from .recovery_v2 import RecoveryService
+from .closures import ClosureService
+from .routes import RouteService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -92,6 +94,8 @@ class DoorstepService:
         self.alerts = AlertService(self)
         self.matching = MatchService(self)
         self.recovery = RecoveryService(self)
+        self.closures = ClosureService(self)
+        self.routes = RouteService(self)
         self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
@@ -109,6 +113,7 @@ class DoorstepService:
             for p in seed.provider_registry():
                 self.store.save_registration(p)
             self.db.set_setting("escalation_ack", "true")
+            self.closures.seed_feeds()
             self.events.append("DEMO_RESET", case_id=None, data={"simulated": True})
         regions = seed.regions()
         return {"status": "reset", "residents": len(seed.residents()), "organizations": len(seed.organizations()),
@@ -1083,6 +1088,7 @@ class DoorstepService:
             # --- additions beyond contract v1.0 (safe to ignore) ---
             **self._zone_view(case.resident_id),
             "recovery": self.recovery.case_view(case.case_id),
+            "route": self.routes.latest_for_case(case.case_id),
             "alert_id": case.alert_id,
             "sector_id": case.sector_id,
             "needs": case.needs.model_dump(),
