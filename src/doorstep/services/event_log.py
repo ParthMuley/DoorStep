@@ -1,4 +1,4 @@
-"""Append-only case timeline, plus replay.
+"""Append-only case timeline (MongoDB ``events`` collection), plus replay.
 
 Status-change events are written in the same transaction as the case row they
 describe, so the displayed status always has persisted evidence behind it.
@@ -50,33 +50,18 @@ class EventLog:
             to_status=to_status,
             data=_redact(data or {}),
         )
-        with self.db.tx() as conn:
-            cur = conn.execute(
-                "INSERT INTO events (event_id, case_id, correlation_id, event_type, data, created_at)"
-                " VALUES (?, ?, ?, ?, ?, ?)",
-                (event.event_id, case_id, correlation_id, event_type,
-                 event.model_dump_json(), event.created_at),
-            )
-            event.seq = cur.lastrowid
+        with self.db.tx():
+            event.seq = self.db.next_seq("events")
+            self.db.coll("events").insert_one({"_id": event.event_id, **event.model_dump(mode="json")})
         return event
 
     def for_case(self, case_id: str) -> list[StatusEvent]:
-        with self.db.read() as conn:
-            rows = conn.execute(
-                "SELECT seq, data FROM events WHERE case_id = ? ORDER BY seq", (case_id,)
-            ).fetchall()
-        out = []
-        for row in rows:
-            ev = StatusEvent.model_validate_json(row["data"])
-            ev.seq = row["seq"]
-            out.append(ev)
-        return out
+        docs = self.db.coll("events").find({"case_id": case_id}).sort("seq", 1)
+        return [StatusEvent.model_validate({k: v for k, v in d.items() if not k.startswith("_")}) for d in docs]
 
     def all(self) -> list[StatusEvent]:
-        with self.db.read() as conn:
-            rows = conn.execute("SELECT seq, data FROM events ORDER BY seq").fetchall()
-        return [StatusEvent.model_validate_json(r["data"]).model_copy(update={"seq": r["seq"]})
-                for r in rows]
+        docs = self.db.coll("events").find({}).sort("seq", 1)
+        return [StatusEvent.model_validate({k: v for k, v in d.items() if not k.startswith("_")}) for d in docs]
 
     def replay_resident_status(self, case_id: str) -> str:
         status = ResidentStatus.UNKNOWN.value

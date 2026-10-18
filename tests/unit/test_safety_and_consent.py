@@ -117,8 +117,9 @@ def test_consent_only_from_resident_or_caregiver(svc):
     maria_confirmed(svc)
     with pytest.raises(Unauthorized):
         svc.request_recovery_handoff(MARIA, share_recovery_needs=True, granted_by="transport_org_a")
-    with pytest.raises(Unauthorized):  # Maria has no caregiver on file
-        svc.request_recovery_handoff(MARIA, share_recovery_needs=True, granted_by="CAREGIVER")
+    # Maria's emergency contact (Ana) may act as caregiver; the grant is attributed to her contact id.
+    svc.request_recovery_handoff(MARIA, share_recovery_needs=True, granted_by="CAREGIVER")
+    assert svc.store.consent_grants_for_case(MARIA)[-1].granted_by == "contact_ana_001"
 
 
 def test_provider_payload_has_no_identity():

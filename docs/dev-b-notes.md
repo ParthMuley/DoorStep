@@ -5,13 +5,28 @@ Implements `docs/interface-contract.md` **v1.0** (Section 3). Everything is synt
 ## Run
 
 ```bash
-scripts/run_backend.sh            # http://127.0.0.1:$DOORSTEP_API_PORT (default 8000); auto-seeds var/doorstep_demo.db
-scripts/reset_demo.sh             # deterministic reset (via the API if running, else reseeds the DB file)
-scripts/smoke_test.sh             # temp backend + Scenario A and B over real HTTP
+scripts/run_backend.sh            # http://127.0.0.1:$DOORSTEP_API_PORT (default 8000); auto-seeds on first start
+scripts/start_mongo.sh            # optional: local MongoDB 7 in Docker, then export MONGODB_URI=mongodb://127.0.0.1:27017
+scripts/reset_demo.sh             # deterministic reset (via the API if running, else reseeds MongoDB)
+scripts/smoke_test.sh             # temp backend (in-memory MongoDB) + Scenario A and B over real HTTP
 PYTHONPATH=src python -m pytest tests/unit -q
 ```
 
-Scripts load `.env` when it exists. Variables used: `SIMULATION_MODE=true` (required), `DEMO_AUTH_TOKEN`, `DOORSTEP_API_PORT`, `DOORSTEP_API_URL`, optional `DOORSTEP_DB_PATH`. Tested on Python 3.11 and 3.14. Only `fastapi`, `uvicorn`, `pydantic`, `httpx` and `pytest` are used, and all are already in `pyproject.toml`.
+**Storage is MongoDB** with two databases: `doorstep_users` (residents, cases, messages, assignments, alerts, events…) and `doorstep_orgs` (organizations / provider registry, provider events). Without `MONGODB_URI`, the backend uses an in-memory mongomock (data is lost when it stops). Tests always use mongomock; `create_app(":memory:")` still works, so A's in-process tests need no change. Optional real-server test: `DOORSTEP_TEST_MONGODB_URI=… pytest tests/unit/test_real_mongo.py`.
+
+Env: `SIMULATION_MODE=true` (required), `DEMO_AUTH_TOKEN`, `DOORSTEP_API_PORT`, `DOORSTEP_API_URL`, `MONGODB_URI`, `MONGODB_USERS_DB`, `MONGODB_ORGS_DB`, `USE_MONGOMOCK`. Dependencies to add to `pyproject.toml` (A owns it): `pymongo`, dev `mongomock` (plus `shapely`, `openai` for later steps).
+
+## v2 endpoints available now (B2: registration)
+
+Contract v2.0 §5.2 / §5.4, responses carry `schema_version: "2.0"`:
+- `POST /residents` `{resident: {...}}`: needs codes validated, `wants_help_contact:false` forces CHECKIN off, LOW/FAILED geocode → `zone_status: UNKNOWN`.
+- `POST /organizations` `{organization: {...}}`: volunteers embedded; availability/reservations are reset at registration.
+- `POST /organizations/{org_id}/volunteers` `{volunteer: {...}}`: needs `X-Org-Agent: <org_id>`.
+- `GET /organizations`: public, sanitized (no phones, addresses or volunteer records).
+- `GET /orgs/{org_id}/volunteers?alert_id=`: needs token + `X-Org-Agent`; only that org's volunteers.
+- `POST /orgs/{org_id}/volunteers/{volunteer_id}/availability` `{alert_id, available}`: repeat-safe; stale alert → 409.
+
+The v1 flow endpoints are unchanged until the switch-over. They read the new resident documents through a temporary adapter (`services/legacy.py`).
 
 ## Contract v1.0 conformance
 

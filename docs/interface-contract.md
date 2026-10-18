@@ -221,7 +221,7 @@ Live alerts show `verification: OFFICIAL_LIVE_DISPLAY_ONLY`, `can_trigger_checki
 Volunteers answer through the simulator (`POST /sim/inbound` from their `phone`, `YES`/`NO`/`SI`). B records the answer against the **current** alert. **Alternatively**, an org agent that collected answers itself posts them:
 
 **`POST /orgs/{org_id}/volunteers/{volunteer_id}/availability`** (token + `X-Org-Agent`)
-`{"alert_id":"alert_001","available":true,"responded_at":"…","idempotency_key":"alert_001:avail:volunteer_sarah"}` → `{"volunteer_id":"volunteer_sarah","alert_id":"alert_001","availability":"AVAILABLE"}`. An answer for an older alert → 409 `STALE_AVAILABILITY`.
+`{"alert_id":"alert_001","available":true,"responded_at":"…","idempotency_key":"alert_001:avail:volunteer_sarah"}` → `{"volunteer_id":"volunteer_sarah","alert_id":"alert_001","availability":"AVAILABLE"}`. An answer for an older alert → 409 `STALE_AVAILABILITY`. The volunteer's *current* alert is the one outreach last asked about (or the first answer if never asked). Answers for any other alert are stale. Unapproved volunteers → 409 `VOLUNTEER_NOT_APPROVED`. `emergency_contacts[].contact_id` is optional on registration; B assigns `<resident_id>_contact_<n>`.
 
 **`GET /orgs/{org_id}/volunteers?alert_id=alert_001`** (token + `X-Org-Agent`): **only this org's** volunteers, with phone, address, vehicle, capabilities and availability for that alert. The org agent uses it to build its `OutreachResult`.
 

@@ -12,7 +12,7 @@ from .events import (
     StatusEvent,
     VerificationEvent,
 )
-from .provider import Organization, ProviderRegistration
+from .provider import ProviderRegistration
 from .requests import (
     DestinationOfferIn,
     DestinationRequirements,
@@ -22,3 +22,18 @@ from .requests import (
     TransportRequirements,
 )
 from .resident import Caregiver, Consent, ConsentGrant, Needs, Resident
+from .needs import NeedCode, labels as need_labels, validate_codes
+from .registry import (
+    Address,
+    AvailabilityState,
+    CalamityType,
+    EmergencyContact,
+    Location,
+    Organization,
+    OrgService,
+    RecoveryHelpType,
+    ResidentProfile,
+    ShelterSite,
+    Volunteer,
+    VolunteerAvailability,
+)

@@ -15,7 +15,7 @@ from doorstep.models import SCHEMA_VERSION
 from doorstep.services.engine import DoorstepService
 
 from . import schemas as s
-from .security import correlation_header, require_demo_token
+from .security import correlation_header, require_demo_token, require_org_agent
 
 router = APIRouter()
 write = APIRouter(dependencies=[Depends(require_demo_token)])
@@ -25,10 +25,13 @@ def svc(request: Request) -> DoorstepService:
     return request.app.state.service
 
 
-def out(payload: dict[str, Any], status: int = 200) -> JSONResponse:
+V2 = "2.0"
+
+
+def out(payload: dict[str, Any], status: int = 200, version: str = SCHEMA_VERSION) -> JSONResponse:
     from fastapi.encoders import jsonable_encoder
 
-    return JSONResponse(status_code=status, content=jsonable_encoder({"schema_version": SCHEMA_VERSION, **payload}))
+    return JSONResponse(status_code=status, content=jsonable_encoder({"schema_version": version, **payload}))
 
 
 def pick(header: Optional[str], body: Optional[s.Body]) -> Optional[str]:
@@ -37,8 +40,8 @@ def pick(header: Optional[str], body: Optional[s.Body]) -> Optional[str]:
 
 # ------------------------------------------------------------------ reads
 @router.get("/health")
-def health():
-    return out({"status": "ok", "simulation_mode": True})
+def health(service: DoorstepService = Depends(svc)):
+    return out({"status": "ok", "simulation_mode": True, "databases": service.db.ping()})
 
 
 @router.get("/cases")
@@ -56,6 +59,11 @@ def get_case_status(case_id: str, corr: Optional[str] = Depends(correlation_head
 @router.get("/providers")
 def providers(service: DoorstepService = Depends(svc)):
     return out(service.registry_view())
+
+
+@router.get("/organizations")
+def list_organizations(service: DoorstepService = Depends(svc)):
+    return out({"organizations": service.registry.list_organizations(), "simulated": True}, version=V2)
 
 
 @router.get("/zones")
@@ -81,8 +89,36 @@ def start_demo_warning(body: s.WarningBody, corr: Optional[str] = Depends(correl
 
 
 @write.post("/residents")
-def register_resident(body: s.RegisterResidentBody, service: DoorstepService = Depends(svc)):
-    return out(service.register_resident(body.profile, body.consent).model_dump(), 201)
+def register_resident(body: s.RegisterResidentBody, corr: Optional[str] = Depends(correlation_header),
+                      service: DoorstepService = Depends(svc)):
+    return out(service.registry.register_resident(body.resident, pick(corr, body) or ""), 201, V2)
+
+
+@write.post("/organizations")
+def register_organization(body: s.RegisterOrganizationBody, corr: Optional[str] = Depends(correlation_header),
+                          service: DoorstepService = Depends(svc)):
+    return out(service.registry.register_organization(body.organization, pick(corr, body) or ""), 201, V2)
+
+
+@write.post("/organizations/{org_id}/volunteers")
+def add_volunteer(org_id: str, body: s.AddVolunteerBody, _: str = Depends(require_org_agent),
+                  corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
+    return out(service.registry.add_volunteer(org_id, body.volunteer, pick(corr, body) or ""), 201, V2)
+
+
+@write.get("/orgs/{org_id}/volunteers")
+def org_volunteers(org_id: str, alert_id: Optional[str] = None, _: str = Depends(require_org_agent),
+                   service: DoorstepService = Depends(svc)):
+    return out(service.registry.org_volunteers(org_id, alert_id), version=V2)
+
+
+@write.post("/orgs/{org_id}/volunteers/{volunteer_id}/availability")
+def record_availability(org_id: str, volunteer_id: str, body: s.AvailabilityBody,
+                        _: str = Depends(require_org_agent), corr: Optional[str] = Depends(correlation_header),
+                        service: DoorstepService = Depends(svc)):
+    return out(service.registry.record_availability(
+        org_id, volunteer_id, alert_id=body.alert_id, available=body.available, responded_at=body.responded_at,
+        idempotency_key=body.idempotency_key, correlation_id=pick(corr, body) or ""), version=V2)
 
 
 @write.post("/cases/{case_id}/responses")

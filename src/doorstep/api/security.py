@@ -25,3 +25,10 @@ def require_demo_token(authorization: str | None = Header(default=None)) -> None
 
 def correlation_header(x_correlation_id: str | None = Header(default=None)) -> str | None:
     return x_correlation_id
+
+
+def require_org_agent(org_id: str, x_org_agent: str | None = Header(default=None)) -> str:
+    """Org-scoped routes: the caller must identify as the org in the path (contract v2.0 §1)."""
+    if not x_org_agent or not hmac.compare_digest(x_org_agent, org_id):
+        raise HTTPException(status_code=403, detail="X-Org-Agent must match the organization in the path")
+    return org_id

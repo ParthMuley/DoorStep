@@ -22,12 +22,3 @@ class ProviderRegistration(DoorstepModel):
     # Transport: depot zone (route start). Destination: where it physically sits.
     base_zone: Optional[str] = None
     simulated: bool = True
-
-
-class Organization(DoorstepModel):
-    """Fictional partner organization that preapproves providers."""
-
-    organization_id: str
-    display_name: str
-    role: str  # "community_support" | "transport" | "destination" | "recovery"
-    simulated: bool = True
