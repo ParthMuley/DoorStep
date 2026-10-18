@@ -28,3 +28,6 @@ Thumbs.db
 
 # Local test logs
 test-reports/
+
+# Local runtime state and logs
+var/

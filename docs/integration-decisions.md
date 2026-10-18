@@ -81,3 +81,17 @@ No in-memory FakeBackend: B's real app runs in-process for tests (`httpx.ASGITra
 - **Validate** every payload in the [Card Playground](https://asi1.ai/developer/card-playground) before relying on it live. The Playground enforces the runtime schema.
 - **Live result (2026-10-17):** the `detail` case card rendered in ASI:One, and its Refresh button sent the selection back and got a new card.
 - **Doorstep rules:** every card's title starts with `SIMULATION`; statuses are shown as color **and** text label; footer row "Data as of <time> · source <x>"; status words are copied verbatim from B; never "safe".
+
+## Agentverse limits found live (2026-10-17)
+
+- **Agent name ≤ 32 characters** (`uagents_core.registration.RegistrationRequest.name`). Longer names fail mailbox registration with `string_too_long`. Org agents are therefore named `doorstep_<org_id>`.
+- **Per-account agent cap:** the current Agentverse plan allows **8** agents (`Agent limit reached 10/8`). Doorstep V2 needs 10 now and 12 with News and Route. Options: delete stale agents (old v1 Transport/Destination), host some agents on a second account (e.g. B's API key), or upgrade. Meanwhile `LOCAL_ONLY_AGENTS` runs the overflow agents on local endpoints. They remain Fetch.ai agents registered on the Almanac and are reachable from the other agents on the same machine, but they have no Agentverse mailbox or profile page.
+
+## Live V2 journey (2026-10-17, dev backend = B's app + v2 test double)
+
+`scripts/journey_probe.py` drove the full journey against the live Doorstep agent through Agentverse in about 50 s:
+- Start check → Calamity Checker `AlertNotification` → **pushed** Alert card and Outreach card (3 orgs, simulated volunteer replies).
+- Maria: simulated SMS + SI → Matching agent proposal (Sarah eligible #1, Lee #2, Joe's sedan rejected `NO_WHEELCHAIR_SPACE`) → approve → org agents accept (volunteer + shelter) → Help on the way (ETA labeled an estimate) → pickup (blue) → arrival (green) → consent card → Post-Calamity referrals ACCEPTED, housing not secured.
+- David: no match `ORDER_ZONE` → escalate → Escalation agent `ACKNOWLEDGED_REQUEST_ONLY`, unresolved.
+
+Transcript: `var/logs/journey_probe.txt` (local, not committed).

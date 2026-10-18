@@ -29,7 +29,8 @@ FeedFetcher = Callable[[str], Awaitable[tuple[bool, int | None, dict[str, Any] |
 
 def feed_url() -> str:
     explicit = os.getenv("ALERT_FEED_URL", "").strip()
-    return explicit or f"{os.getenv('DOORSTEP_API_URL', 'http://127.0.0.1:8000').rstrip('/')}/demo/feeds/caloes"
+    base = (os.getenv("DOORSTEP_API_URL") or "").strip() or "http://127.0.0.1:8000"  # empty var = default
+    return explicit or f"{base.rstrip('/')}/demo/feeds/caloes"
 
 
 def source_for(url: str) -> dict[str, str]:

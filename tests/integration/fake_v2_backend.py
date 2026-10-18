@@ -15,6 +15,7 @@ from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse
 
 from doorstep.api.app import create_app
+from doorstep.api.security import expected_token
 from doorstep.workflows.backend_v2 import DoorstepBackendV2
 
 TOKEN = "change-me-local-demo-token"
@@ -56,7 +57,7 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
     r = APIRouter()
 
     def authed(authorization: str | None) -> bool:
-        return authorization == f"Bearer {TOKEN}"
+        return authorization == f"Bearer {expected_token()}"  # same rule as B's real routes
 
     # ---------------------------------------------------------------- alerts
     @r.get("/demo/feeds/caloes")
@@ -105,6 +106,11 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
             affected.append({"case_id": case_id, "resident_id": resident_id, "zone_status": status,
                              "alert_id": alert_id})
         simulated = body["source"]["source_type"] == "OFFICIAL_SIMULATION"
+        if simulated and new_alerts and not state["cases_created"]:
+            # Stand-in for B's geofencing: create the real cases + simulated check-ins in B's DB.
+            state["service"].start_demo_warning("zone_3", "la_hacks_demo_v1", "SIMULATED_OFFICIAL",
+                                                body.get("correlation_id"))
+            state["cases_created"] = True
         warning = next((a for a in new_alerts if a["status"] == "WARNING"), None)
         if warning:
             state["warning_alert_id"] = warning["alert_id"]
@@ -326,16 +332,23 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
     return r
 
 
-def make_v2_backend(monkeypatch, agent_addresses: dict[str, str] | None = None) -> tuple[DoorstepBackendV2, dict]:
-    """B's real app (in-memory Mongo) + v2 stand-ins in front. Returns (client, state)."""
-    monkeypatch.setenv("SIMULATION_MODE", "true")
-    monkeypatch.delenv("DEMO_AUTH_TOKEN", raising=False)
-    app = create_app(":memory:", seed=True)
+def build_v2_app(agent_addresses: dict[str, str] | None = None, db_path: str | None = ":memory:"):
+    """B's real app + v2 stand-ins in front. Also used by scripts/dev_backend_v2.py (DEV ONLY)."""
+    app = create_app(db_path, seed=True)
     state: dict[str, Any] = {"features": [], "edit": 1_792_281_600_000, "seen": set(), "ingests": 0, "alert_seq": 0,
                              "proposals": {}, "declined": {}, "assignments": {}, "assign_seq": 0, "esc_seq": 0,
                              "escalations": {}, "ref_seq": 0, "referrals": {}, "service": app.state.service}
+    state["cases_created"] = False
     router = build_v2_router(state, agent_addresses or {})
     for route in reversed(router.routes):
         app.router.routes.insert(0, route)
+    return app, state
+
+
+def make_v2_backend(monkeypatch, agent_addresses: dict[str, str] | None = None) -> tuple[DoorstepBackendV2, dict]:
+    """In-process client for tests. Returns (client, state)."""
+    monkeypatch.setenv("SIMULATION_MODE", "true")
+    monkeypatch.delenv("DEMO_AUTH_TOKEN", raising=False)
+    app, state = build_v2_app(agent_addresses)
     client = DoorstepBackendV2(base_url="http://backend.test", token=TOKEN, transport=httpx.ASGITransport(app=app))
     return client, state

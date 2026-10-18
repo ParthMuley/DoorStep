@@ -1,8 +1,0 @@
-{
-  "_note": "DOORSTEP DEMO - fictional destinations owned by the Destination Provider agent. Values mirror Developer B's seed (doorstep.demo.seed.destination_offers). accepts_requests is internal to this agent.",
-  "destinations": [
-    {"provider_id": "destination_org_a", "destination_id": "dest_civic_center_sim", "step_free_entry": true, "accessible_restroom": true, "pets_allowed": true, "service_animals_allowed": true, "beds_available": 12, "oxygen_power_outlets": true, "accepts_requests": true},
-    {"provider_id": "destination_org_b", "destination_id": "dest_library_hall_sim", "step_free_entry": false, "accessible_restroom": false, "pets_allowed": true, "service_animals_allowed": true, "beds_available": 25, "oxygen_power_outlets": false, "accepts_requests": true},
-    {"provider_id": "destination_org_c", "destination_id": "dest_hotel_sim", "step_free_entry": true, "accessible_restroom": true, "pets_allowed": false, "service_animals_allowed": true, "beds_available": 2, "oxygen_power_outlets": false, "accepts_requests": true}
-  ]
-}

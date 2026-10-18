@@ -43,11 +43,23 @@ _RESIDENT = {"resident": {"type": "string", "enum": RESIDENTS, "description": "W
 
 # Only tools the coordinator can actually run today. New tools are added as actions land.
 TOOLS: list[dict[str, Any]] = [
-    _tool("start_readiness_check", "Start the simulated Zone 3 readiness check (simulated official warning; "
-          "sends simulated check-ins to enrolled residents)."),
+    _tool("start_readiness_check", "Start the simulated Zone 3 readiness check: issue a simulated official "
+          "wildfire alert; the Calamity Checker agent detects it and volunteer outreach starts."),
     _tool("case_status", "Show the evidence-backed status card for one resident's case.", _RESIDENT, ["resident"]),
-    _tool("show_suitable_volunteers", "Show suitable providers/volunteers for one resident and why each "
-          "matches or is rejected (deterministic matching).", _RESIDENT, ["resident"]),
+    _tool("simulate_resident_reply", "Demo control: simulate the resident's SMS reply asking for help and "
+          "confirming their needs.", _RESIDENT, ["resident"]),
+    _tool("find_match", "Find suitable available volunteers and a shelter for one resident, with reasons "
+          "(deterministic matching).", _RESIDENT, ["resident"]),
+    _tool("approve", "Approve the simulated arrangement proposed for one resident, so the volunteer and "
+          "shelter organizations are asked to accept.", _RESIDENT, ["resident"]),
+    _tool("confirm_pickup", "Record the simulated pickup of one resident (volunteer report + resident "
+          "confirmation).", _RESIDENT, ["resident"]),
+    _tool("confirm_arrival", "Record the simulated arrival of one resident at the shelter (shelter check-in).",
+          _RESIDENT, ["resident"]),
+    _tool("request_recovery", "With the resident's consent, request further help (temporary housing, insurance "
+          "guidance) from recovery organizations.", _RESIDENT, ["resident"]),
+    _tool("escalate", "Escalate one resident's case to the simulated authorized response service (used when "
+          "ordinary volunteers can't be sent, e.g. inside an evacuation-order zone).", _RESIDENT, ["resident"]),
     _tool("test_push", "Developer check: send a delayed follow-up message to test unsolicited updates."),
     _tool("help", "Explain what this demo coordinator can do. Use when no other tool fits."),
 ]
@@ -112,12 +124,25 @@ def keyword_intent(text: str) -> Intent:
     """Deterministic fallback; always returns an intent (help when nothing matches)."""
     lowered = text.lower()
     resident = next((r for r in RESIDENTS if r in lowered), "maria")
+    arg = {"resident": resident}
     if "test push" in lowered:
         return Intent("test_push")
-    if "provider" in lowered or "offer" in lowered or "volunteer" in lowered or "match" in lowered:
-        return Intent("show_suitable_volunteers", {"resident": resident})
-    if "start" in lowered and ("check" in lowered or "warning" in lowered):
+    if "start" in lowered and ("check" in lowered or "warning" in lowered or "alert" in lowered):
         return Intent("start_readiness_check")
+    if "simulate" in lowered and ("reply" in lowered or "sms" in lowered or "answer" in lowered):
+        return Intent("simulate_resident_reply", arg)
+    if "approve" in lowered:
+        return Intent("approve", arg)
+    if "pickup" in lowered or "picked up" in lowered:
+        return Intent("confirm_pickup", arg)
+    if "arriv" in lowered:
+        return Intent("confirm_arrival", arg)
+    if "recovery" in lowered or "further help" in lowered:
+        return Intent("request_recovery", arg)
+    if "escalat" in lowered:
+        return Intent("escalate", arg)
+    if any(w in lowered for w in ("match", "volunteer", "provider", "offer")):
+        return Intent("find_match", arg)
     if "status" in lowered:
-        return Intent("case_status", {"resident": resident})
+        return Intent("case_status", arg)
     return Intent("help")

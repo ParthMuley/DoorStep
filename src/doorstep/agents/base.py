@@ -51,7 +51,10 @@ def build_agent(name: str, seed: str, port: int, profile: str, description: str)
     """Mailbox agent on Agentverse when an API key is configured (PROVIDER_USE_MAILBOX=false
     forces local-only endpoints for fast development)."""
     use_mailbox = os.getenv("PROVIDER_USE_MAILBOX", "true" if agentverse_api_key() else "false").lower() == "true"
-    if use_mailbox:
+    # Agentverse plans cap the number of agents per account; agents listed here run on a
+    # local endpoint instead (still Fetch.ai agents on the Almanac, reachable on this machine).
+    local_only = {n.strip() for n in os.getenv("LOCAL_ONLY_AGENTS", "").split(",") if n.strip()}
+    if use_mailbox and name not in local_only:
         agent = Agent(name=name, seed=seed, port=port, mailbox=True, publish_agent_details=True,
                       readme_path=str(PROFILES / profile), description=description)
         enable_auto_mailbox(agent, port)

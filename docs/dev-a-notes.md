@@ -47,3 +47,13 @@ Reviewed `docs/interface-contract.md` v2.0 rev 2 and `docs/DOORSTEP_V2_TEAM_PLAN
 - **Demo personas:** volunteer and shelter answers are simulated from `agents/fixtures/volunteer_personas.json` (Sarah YES, Joe YES, Maya no reply, Lee YES). `DECLINE_VOLUNTEERS=volunteer_sarah` forces the decline → next-alternate path.
 - **Tests:** `tests/integration/test_fetch_v2_agents.py`, 7 agent-pair tests, offline. They cover outreach, the 3 identical polls → 1 notification rule, failed-fetch backoff, Maria's match → accept → pickup → arrival, decline → Lee, David's receipt-only escalation, and the recovery referrals plus the no-consent case.
 - **Not yet:** the Doorstep coordinator doesn't drive the V2 flow yet (the next step; it needs B's real endpoints or the double in a dev server); News and Route agents; LangGraph.
+
+### Doorstep agent drives the V2 journey (2026-10-17)
+- `agents/journey.py` holds the V2 flow state and steps. The coordinator routes card clicks, ASI:One tool calls and keywords into it, and pushes alert and outreach cards to the users talking to it.
+- **Removed:** the v1 Transport/Destination agents, `provider_client.py`, the v1 offer messages and the v1 coordinator actions. The Organization agents replace them.
+- **Dev run before B's v2 routes land:** `.venv/Scripts/python scripts/dev_backend_v2.py` (B's app + test double, DEV ONLY), then `scripts/run_agents.ps1`, then `scripts/journey_probe.py`, or chat in ASI:One.
+- **Tests:** `tests/integration/test_fetch_v2_journey.py`, an end-to-end ASI:One-user conversation over all agents (offline).
+- **Known gaps:**
+  - Pickup evidence marks the resident confirmation as simulated until B answers review item 5.
+  - The journey state is in memory; the thin LangGraph step will make it durable.
+  - `GET /cases` doesn't reflect v2 assignments until B's v2 lands, so status after acceptance uses the journey card.

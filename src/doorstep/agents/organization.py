@@ -159,7 +159,8 @@ def get_backend() -> DoorstepBackendV2:
 def main(org_id: str) -> None:
     if org_id not in DEMO_ORGS:
         raise SystemExit(f"Unknown demo org {org_id}. Choose one of {DEMO_ORGS}.")
-    agent = build_agent(f"doorstep_org_{org_id}", seed_for(f"ORG_SEED_{org_env_key(org_id)}"),
+    # Agentverse agent names are max 32 characters.
+    agent = build_agent(f"doorstep_{org_id}", seed_for(f"ORG_SEED_{org_env_key(org_id)}"),
                         int(os.getenv(f"ORG_PORT_{org_env_key(org_id)}", str(ORG_PORT_BASE + DEMO_ORGS.index(org_id)))),
                         "organization.md",
                         f"DOORSTEP DEMO: simulated partner organization agent for {org_id} (fictional).")

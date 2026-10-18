@@ -68,7 +68,8 @@ async def test_client_falls_back_to_none(fake):
 
 def test_keyword_fallback():
     assert keyword_intent("Status for David").args == {"resident": "david"}
-    assert keyword_intent("Show available suitable providers").name == "show_suitable_volunteers"
+    assert keyword_intent("Show available suitable providers").name == "find_match"
+    assert keyword_intent("approve the arrangement for David").args == {"resident": "david"}
     assert keyword_intent("Start the simulated Zone 3 readiness check").name == "start_readiness_check"
     assert keyword_intent("what's the weather").name == "help"
 

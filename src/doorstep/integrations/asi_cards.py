@@ -34,6 +34,12 @@ COLOR_LABELS = {
 }
 
 
+def text_message(text: str) -> ChatMessage:
+    """Plain DEMO-labeled chat reply (no card)."""
+    return ChatMessage(timestamp=datetime.now(timezone.utc), msg_id=uuid4(),
+                       content=[TextContent(type="text", text=f"{DEMO_PREFIX} {text}")])
+
+
 class CardValidationError(ValueError):
     pass
 
@@ -226,6 +232,24 @@ def operations_board_card(*, counts: list[dict[str, Any]], unresolved: list[dict
                         for name, cid in case_buttons][:4] or
                        [{"label": "Refresh", "selection": {"action": "operations_board"}}]}
     return Card("detail", payload, f"Operations board:\n{_rows_text(rows)}")
+
+
+def recovery_consent_card(*, case_id: str, display_name: str, help_types: list[str]) -> Card:
+    """Ask before sharing anything with recovery organizations (consent is per purpose)."""
+    readable = ", ".join(h.replace("_", " ").lower() for h in help_types)
+    rows = [_row("Question", f"Share {display_name}'s accessibility needs with recovery organizations to request "
+                             f"help with: {readable}?"),
+            _row("What is shared", "Only the minimum for each help type (needs codes, language, pets). "
+                                   "No address or phone."),
+            _row("Note", "A referral is a request, not secured housing or a filed claim."),
+            _footer(None, "Doorstep consent record")]
+    payload = {"title": f"{SIM_PREFIX} · Further help · {display_name}", "summary_rows": rows,
+               "approve_cta": {"label": "Yes, share and request help (resident consents)",
+                               "selection": {"action": "recovery_consent", "case_id": case_id}, "primary": True},
+               "reject_cta": {"label": "No thanks",
+                              "selection": {"action": "recovery_decline", "case_id": case_id}}}
+    return Card("review", payload, f"Does {display_name} want further help ({readable})? Reply 'yes, request "
+                                   f"recovery help for {display_name.split(' ')[0]}' to consent.\n{_rows_text(rows)}")
 
 
 def info_card(title: str, rows: list[tuple[str, Any]], narration_intro: str, source: str,
