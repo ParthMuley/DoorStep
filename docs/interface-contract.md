@@ -441,11 +441,20 @@ B matches approved orgs whose `recovery_services` include each help type, neares
 - `shared_payload` is exactly what the Post-Calamity agent may forward; it's per help type and minimal.
 - `share_recovery_needs:false` → 409 `CONSENT_MISSING`, recorded as `NOT_REQUESTED`, nothing shared.
 - B never files claims or applications; `INSURANCE_GUIDANCE` is a referral to a (simulated) helper org.
+- **When:** only after confirmed arrival, or for residents who self-reported `ALREADY_LEFT` / `HAS_PLAN`. Otherwise 409 `INVALID_TRANSITION` (`NOT_YET_EVACUATED`).
+- **Consent by SMS:** the arrival message asks whether to share the resident's needs for further help. A `SI`/`YES` reply (resident or caregiver) records RECOVERY consent; `NO` records a decline. The Post-Calamity agent still sends the `consent` object on this call.
+- **Which org:** the nearest region first. In it, an approved org whose `recovery_services` include the help type, within that org's `service_radius_km` (ties broken by `org_id`). Each referral shows `org_id`, `org_name`, `region_id` and `distance_km`.
+- **Shared fields per help type:** `TEMPORARY_HOUSING` → language, needs ∩ {1,3,4,5,6,8}, `pet_count`; `MEDICAL_EQUIPMENT_REPLACEMENT` → needs ∩ {3,8,9}; `SUPPLIES` → needs ∩ {3,4,5}, `pet_count`; `INSURANCE_GUIDANCE` / `CASEWORK` → language only. Never a name, phone, address or contacts.
+- **Asking again** (new idempotency key) reuses open referrals (REQUESTED/ACCEPTED/COMPLETED) for those help types, so there are no duplicates. It skips orgs that already declined that help type. Help types nobody offers nearby are listed in `unmatched_help_types` (HTTP 200 if nothing was created).
+- The response also has `recovery_status` (case level: ACCEPTED if any accepted, else REQUESTED, else COMPLETED, else UNRESOLVED).
 
 **`POST /recovery/{referral_id}/respond`** (token + `X-Agent-Token`; the Volunteer Network agent answers for recovery orgs, and `org_id` must be the referral's org): `{"org_id":"recovery_housing_demo","decision":"ACCEPTED","evidence":null,"idempotency_key":"ref_001:respond:accepted"}`
 - `decision` ∈ `ACCEPTED | DECLINED (→UNRESOLVED) | COMPLETED`.
 - `COMPLETED` requires `evidence: {"type":"SIMULATED_SERVICE_CONFIRMED","reference":"…"}`.
-- → `{"referral_id":"ref_001","status":"ACCEPTED","housing_secured":false}`. `housing_secured` is true only for a COMPLETED `TEMPORARY_HOUSING` referral with evidence (still simulated).
+- → `{"referral_id":"ref_001","case_id","help_type","org_id","status":"ACCEPTED","housing_secured":false,"recovery_status","next_alternate":null}`. `housing_secured` is true only for a COMPLETED `TEMPORARY_HOUSING` referral with evidence (still simulated).
+- **Transitions:** REQUESTED → ACCEPTED / UNRESOLVED / COMPLETED; ACCEPTED → COMPLETED / UNRESOLVED. Repeating the current decision is idempotent (`duplicate: true`); anything else is 409 `INVALID_TRANSITION`. A wrong `org_id` → 403 `WRONG_ORG`. Missing evidence for COMPLETED → 409 `INSUFFICIENT_EVIDENCE`.
+- **DECLINED** → `UNRESOLVED`, with `next_alternate: {"org_id","region_id"}` (the next nearest org for that help type, or null). Request again to refer there.
+- The resident gets DEMO messages when a referral is requested, accepted or completed (never "secured" before evidence).
 
 ### 5.9 Road closures (News agent ↔ B)
 - **`GET /demo/feeds/news`** → `{"items":[{"item_id":"news_001","source_name":"Fictional Valley Gazette (DEMO)","url":null,"published_at":"…","headline":"Residents report Canyon Rd blocked by debris (DEMO)","body":"…"}]}`

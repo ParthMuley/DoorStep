@@ -61,6 +61,7 @@ from .event_log import EventLog
 from .registry import RegistryService
 from .alerts import AlertService
 from .matching_v2 import MatchService
+from .recovery_v2 import RecoveryService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -90,6 +91,7 @@ class DoorstepService:
         self.graph = graph or build_demo_graph()
         self.alerts = AlertService(self)
         self.matching = MatchService(self)
+        self.recovery = RecoveryService(self)
         self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
@@ -297,6 +299,12 @@ class DoorstepService:
 
             if intent == ResponseIntent.PICKUP_CONFIRMED:
                 self._record_resident_pickup(case, resident, sender, corr)
+            elif intent in (ResponseIntent.CONFIRM_YES, ResponseIntent.CONFIRM_NO) \
+                    and case.pending_candidate_needs is None and case.resident_status == R.ARRIVAL_CONFIRMED:
+                # Reply to the arrival message's "share your needs for further help?" question.
+                party = resident.resident_id if actor == "resident" else (
+                    resident.caregiver.caregiver_id if resident.caregiver else resident.resident_id)
+                self.recovery.sms_reply_after_arrival(case, resident, party, intent == ResponseIntent.CONFIRM_YES, corr)
             elif intent == ResponseIntent.CONFIRM_YES:
                 if case.pending_candidate_needs is not None:
                     self._confirm(case, case.pending_candidate_needs, actor, corr)
@@ -1074,6 +1082,7 @@ class DoorstepService:
             "correlation_id": corr,
             # --- additions beyond contract v1.0 (safe to ignore) ---
             **self._zone_view(case.resident_id),
+            "recovery": self.recovery.case_view(case.case_id),
             "alert_id": case.alert_id,
             "sector_id": case.sector_id,
             "needs": case.needs.model_dump(),

@@ -259,8 +259,27 @@ def run_scenario_a_v2(client, log=print) -> dict[str, Any]:
     _check(a["resident_status"] == "ARRIVAL_CONFIRMED", "arrival -> green")
     log("V2-7 pickup (Maria's RECOGIDO + volunteer report) then shelter check-in -> green")
 
+    # Post-calamity: Maria says SI to sharing her needs; the Post-Calamity agent requests help.
+    _ok(client.post("/sim/inbound", json={"sender": seed.MARIA_SENDER, "text": "SI", "external_id": "v2-recovery-si"}))
+    rec = _ok2(client.post(f"/cases/{MARIA}/recovery", json={
+        "consent": {"share_recovery_needs": True, "granted_by": "RESIDENT"},
+        "help_types": ["TEMPORARY_HOUSING", "INSURANCE_GUIDANCE"], "idempotency_key": f"{MARIA}:recovery:v2"}), 201)
+    refs = {r["help_type"]: r for r in rec["referrals"]}
+    _check(set(refs) == {"TEMPORARY_HOUSING", "INSURANCE_GUIDANCE"} and not rec["housing_secured"],
+           "one referral per help type, nothing secured yet")
+    _check("phone" not in str(rec) and "address" not in str(rec), "only consent-scoped fields shared")
+    housing = refs["TEMPORARY_HOUSING"]
+    _ok2(client.post(f"/recovery/{housing['referral_id']}/respond", headers=NETWORK,
+                     json={"org_id": housing["org_id"], "decision": "ACCEPTED"}))
+    done = _ok2(client.post(f"/recovery/{housing['referral_id']}/respond", headers=NETWORK,
+                            json={"org_id": housing["org_id"], "decision": "COMPLETED",
+                                  "evidence": {"type": "SIMULATED_SERVICE_CONFIRMED", "reference": "res_sim_001"}}))
+    _check(done["housing_secured"], "housing secured only after COMPLETED with evidence")
+    log(f"V2-8 post-calamity: housing via {housing['org_id']} COMPLETED (simulated), insurance guidance REQUESTED")
+
     final = _ok(client.get(f"/cases/{MARIA}"))
     _check(final["map"]["color"] == "green" and final["evidence"]["timeline_replay_matches_status"], "green + replay")
+    _check(final["recovery"]["housing_secured"], "case view shows recovery")
     log("V2-A PASS\n" + final["summary_text"])
     return final
 

@@ -137,9 +137,11 @@ class EscalationReason(str, Enum):
 
 
 class ReferralStatus(str, Enum):
-    # A referral is NOT completed assistance.
+    # A referral is NOT completed assistance; COMPLETED needs evidence.
+    NOT_REQUESTED = "NOT_REQUESTED"
     REQUESTED = "REQUESTED"
     ACCEPTED = "ACCEPTED"
+    COMPLETED = "COMPLETED"
     UNRESOLVED = "UNRESOLVED"
 
 

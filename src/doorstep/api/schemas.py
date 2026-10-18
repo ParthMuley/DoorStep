@@ -112,6 +112,19 @@ class RecoveryBody(Body):
     idempotency_key: Optional[str] = None
 
 
+class RecoveryV2Body(Body):
+    consent: RecoveryConsent
+    help_types: list[str]
+    idempotency_key: Optional[str] = None
+
+
+class RecoveryRespondBody(Body):
+    org_id: str
+    decision: Literal["ACCEPTED", "DECLINED", "COMPLETED"]
+    evidence: Optional[dict[str, Any]] = None
+    idempotency_key: Optional[str] = None
+
+
 class RecoveryResponseBody(Body):
     provider_id: str
     decision: Literal["ACCEPTED", "DECLINED"]

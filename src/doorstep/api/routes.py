@@ -286,6 +286,24 @@ def sim_outreach_deadline(alert_id: str, service: DoorstepService = Depends(svc)
     return out(service.alerts.outreach_deadline(alert_id), version=V2)
 
 
+@write.post("/cases/{case_id}/recovery")
+def case_recovery(case_id: str, body: s.RecoveryV2Body, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    view, created = service.recovery.request(
+        case_id, share_recovery_needs=body.consent.share_recovery_needs, granted_by=body.consent.granted_by,
+        granted_at=body.consent.granted_at, help_types=body.help_types, idempotency_key=body.idempotency_key,
+        correlation_id=pick(corr, body))
+    return out(view, 201 if created else 200, V2)
+
+
+@write.post("/recovery/{referral_id}/respond", dependencies=[Depends(require_agent_token)])
+def recovery_respond(referral_id: str, body: s.RecoveryRespondBody, corr: Optional[str] = Depends(correlation_header),
+                     service: DoorstepService = Depends(svc)):
+    return out(service.recovery.respond(referral_id, org_id=body.org_id, decision=body.decision,
+                                        evidence=body.evidence, idempotency_key=body.idempotency_key,
+                                        correlation_id=pick(corr, body)), version=V2)
+
+
 @write.post("/matches/propose")
 def matches_propose(body: s.ProposeMatchBody, corr: Optional[str] = Depends(correlation_header),
                     service: DoorstepService = Depends(svc)):

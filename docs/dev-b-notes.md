@@ -48,6 +48,11 @@ Responses carry `schema_version: "2.0"`.
 8. Arrival: `POST /assignments/{id}/arrival {"type":"SHELTER_CHECKIN","shelter_org_id","site_id","shelter_confirmed":true}`. Green; the volunteer is released.
 9. David: propose returns `ORDER_ZONE`. Then `POST /cases/{id}/escalate`, then `POST /escalations/{id}/ack` (`AUTO_ESCALATION_ACK=false` when the Escalation agent runs).
 10. Scenario C: `{"action":"FREEZE_FEED","freeze_age_minutes":30}`, then ingest. Zones go STALE and matching refuses.
+11. Post-calamity (B5):
+    - After arrival the resident replies `SI` (consent).
+    - The Post-Calamity agent calls `POST /cases/{id}/recovery {consent:{share_recovery_needs:true, granted_by:"RESIDENT"}, help_types:["TEMPORARY_HOUSING","INSURANCE_GUIDANCE"]}`. That creates one referral per type, to the nearest org offering it, with a minimal `shared_payload` to forward.
+    - The network agent answers for the recovery org: `POST /recovery/{referral_id}/respond {org_id, decision: ACCEPTED|DECLINED|COMPLETED, evidence?}` (network token). COMPLETED needs `{"type":"SIMULATED_SERVICE_CONFIRMED","reference"}`. DECLINED returns `next_alternate`.
+    - `GET /cases/{id}` shows a `recovery` block with `status`, `referrals` and `housing_secured`.
 
 **Removed (v2.0):** `/organizations/{id}/volunteers`, `/orgs/{id}/volunteers`, `/orgs/{id}/volunteers/{vid}/availability`, `/orgs/{id}/outreach`, `X-Org-Agent`. A's stand-ins for these should switch to the v2.1 routes above.
 

@@ -130,7 +130,11 @@ class RecoveryReferral(DoorstepModel):
     schema_version: str = SCHEMA_VERSION
     referral_id: str = Field(default_factory=lambda: new_id("ref"))
     case_id: str
-    provider_id: str = "recovery_org_demo"
+    provider_id: str = "recovery_org_demo"  # v2: the recovery org_id
+    help_type: Optional[str] = None         # v2: TEMPORARY_HOUSING, INSURANCE_GUIDANCE, ...
+    region_id: Optional[str] = None
+    distance_km: Optional[float] = None
+    evidence: Optional[dict[str, Any]] = None  # required for COMPLETED
     status: ReferralStatus = ReferralStatus.REQUESTED
     # Exactly what was shared with the recovery provider (and nothing more).
     shared_fields: dict[str, Any] = Field(default_factory=dict)
