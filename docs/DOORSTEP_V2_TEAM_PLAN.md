@@ -1,4 +1,4 @@
-# DOORSTEP V2 — Two-Person Plan (Fetch.ai track) — revision 5
+# DOORSTEP V2 — Two-Person Plan (Fetch.ai track) — revision 6
 
 *Shared plan for Developer A and Developer B. Both Claude Code sessions read this file. Change only by PR, agreed by both. Revision 2 (2026-10-17) re-aligned the plan with the team's original idea and switched to MongoDB. **Revision 3 (2026-10-17, proposed by A, agreed by B):**
 - no agent per organization: one Volunteer Network agent serves all partner orgs;
@@ -10,7 +10,126 @@
 - §17 explains how to get a HERE API key;
 - B's amendments (§0.5): the sender address must come from the authenticated Doorstep agent, the demo link codes are public, and a 15-minute reply deadline applies.
 
-See §0 (rev 4), §0.5 (amendments) and §0b (rev 3).*
+**Revision 5 (2026-10-18, proposed by A):** self-registration in ASI:One with address geocoding (§00).
+
+**Revision 6 (2026-10-18, proposed by A, pending B's agreement):** what we learned running everything live in ASI:One, plus:
+- bulk volunteer roster import with invite codes;
+- "Your trip" snapshot cards;
+- the HERE route map image, **hosted by B**;
+- one consolidated list of asks and questions for B (§000.9).
+
+See §000 (rev 6), §00 (rev 5), §0 (rev 4), §0.5 (amendments) and §0b (rev 3).*
+
+## 000. Revision 6 (2026-10-18, proposed by A, pending B's agreement)
+
+All of this runs on `feat/fetch-agents` against B's real app (`scripts/dev_backend_v2.py` = B's app plus A's stand-ins for routes B hasn't built yet). The 8 agents are on Agentverse mailboxes. Everything was verified live in ASI:One with synthetic people only. Commits: `1cbad8a`, `f35e2ba`, `a656ef8`, `d0e1915` and this one.
+
+### 000.1 Live ASI:One behaviour we must design for (verified)
+| Finding | Consequence / what A did |
+|---|---|
+| ASI:One shows an agent message **only in the chat whose `session` the envelope carries**. A push sent from an agent-to-agent handler (e.g. the alert) carried the Calamity agent's session and never appeared anywhere. | The outbox now sends each person's messages through the context of **their latest chat message** (`Outbox.remember`). After an agent restart, the person must send one message before pushes reach them again. |
+| Every agent message that arrives before the person's next reply is **folded into one bubble** (newest text first), and **only the last card renders**, even when the messages are minutes apart. | Every person-facing update is now a **full snapshot card** (§000.4). The outbox adds an "Also in this update" row naming any cards it had to drop. |
+| **Cards without buttons don't render on their own** (`is_terminal`). | Info-only cards need a Refresh button when they're sent alone (A: to do). |
+| `<code>` in text is swallowed as an HTML tag. | Reply wording fixed ("LINK followed by your code"). |
+| **ASI:One's built-in personal assistant can intercept.** After a page reload the chat's "To:" switched to the assistant; it called our agent itself and told the user a **stale status from old chat history**. Our next push then followed the assistant's session and never reached the chat. | Demo rule: check "To: doorstep_coordinator" and turn off the assistant's auto-response in chat settings. A (to do): remember only sessions from direct chat messages. |
+| Card `hero_image` (tested live): a public **`https://`** URL renders, loaded **directly by the viewer's browser** (no proxy); a **`data:` URI makes ASI:One reject the whole card**; `http://localhost` is blocked by asi1.ai's CSP (`img-src 'self' data: blob: https:`). | The map image needs a **public https URL** → B hosts it (§000.7). |
+
+### 000.2 Self-registration (rev 5) verified live
+- Flow: `UNLINK` (new demo command) → "register as resident" → form → confirm → linked.
+- The check-in card then reached the resident's own chat after the alert. The case was in the WARNING zone and `CHECKIN_SENT`.
+- The geocode guardrail worked: "Del Mar High School, …" matched a POI (`NOT_PRECISE:place`) and was refused. The bare street address matched at house-number level (`HIGH`). That took 2 HERE geocodes.
+
+### 000.3 Bulk volunteer roster import + invite codes (new)
+- **How it works:** `scripts/import_volunteers.py <csv> --org <org> --region <region>` → `workflows/roster_import.py`.
+  - Each row goes through B's real `POST /regions/{r}/orgs/{o}/volunteers`.
+  - Rows are validated first; a bad row never stops the others.
+  - Re-import reports `EXISTS` and never overwrites.
+  - Imported volunteers are approved by default (the org vouches for its roster); `approved=no` per row.
+- **Invite codes:** each imported volunteer gets a **one-time invite code** (e.g. `EASTSIDE-6128`) that they type as `LINK <code>` in ASI:One.
+- **Sample roster:** `scripts/rosters/eastside_rides_demo.csv` (5 synthetic volunteers).
+- **Live run:** imported → Alex linked → "Are you available?" → yes → coordinator matched Maria.
+  - **Alex ranked #1 at 0.3 km.** The other imported volunteers were rejected with B's reason codes (no wheelchair space, pet capacity, awaiting reply, not approved).
+  - Then: approve → assignment card → accept → live HERE route → two-party pickup → arrival → GREEN.
+- **Needs B:** `POST /organizations/{org_id}/invites` (stand-in in `fake_v2_backend.py`); optionally a batch volunteer endpoint.
+
+### 000.4 "Your trip" snapshot cards (new)
+Residents and volunteers get one `trip_card` at every step:
+- progress (✓/○ accepted · picked up · arrived);
+- who is coming and the ETA (resident), or the route summary plus what it avoids (volunteer);
+- the next step;
+- **the one button that applies now** (Confirm pickup, then Refresh).
+
+Turn-by-turn steps go in the text. Verified live: pickup and arrival folded into one bubble whose card was the complete final state. The coordinator's case card (with coordinator buttons) is no longer sent to residents or volunteers.
+
+### 000.5 ASI:One commands by role (current)
+Every role: `LINK <code>`, `UNLINK` (demo), `register as resident` / `register as volunteer` (unlinked only), `status`. Dev: `test push`, `test image web|data|local|plain`. Card buttons send the same actions as the text commands.
+
+| Role | Text commands | Card buttons |
+|---|---|---|
+| **Resident** | `1`/`2`/`3`/`4` (need help / have a plan / already left / call me) · `yes`/`sí`/`no` (confirm needs) · `confirm pickup` · `status` | Check-in options · Confirm needs · Confirm pickup · Further help yes/no (recovery consent) · Refresh |
+| **Volunteer** | `yes`/`no` (availability) · `accept`/`decline` (assignment) · `confirm pickup` · `status` | Yes, I'm available / Not now · Accept / Decline · Confirm pickup · Refresh |
+| **Coordinator** (ASI:One tool calling, keyword fallback) | `Start the simulated Zone 3 readiness check` · `Simulate Maria's/David's reply` · `Find a match for Maria/David` · `approve` · `Confirm pickup for Maria` · `Confirm arrival for Maria` · `Request recovery for Maria` · `Escalate David` · `Road conditions` · `Status for Maria` · `help` | Approve / Reject (match) · Show suitable volunteers · Confirm pickup / arrival · Recovery consent · Escalate · Refresh status |
+
+### 000.6 Why these are agents (judge question) and what A will strengthen
+- **Strong:**
+  - **Doorstep:** the only interface a person reaches in ASI:One; runs multi-step conversations, pushes unprompted and orchestrates the rest.
+  - **Calamity Checker:** autonomous; perceives the feed and starts the response with nobody asking.
+  - **Volunteer Network:** acts on the orgs' behalf, alone holds the network token, and waits minutes for people. In reality each partner would run it.
+  - **News:** an LLM reads text into claims and never decides truth; reusable by any ASI:One user.
+- **Medium:**
+  - **Route:** reusable avoid-the-zones routing.
+  - **Post-Calamity:** a separate, consent-gated phase.
+- **Weak today:**
+  - **Matching** is a pass-through.
+  - **Escalation** only records a receipt.
+- **A's plan:**
+  - Matching re-ranks B's top 3 by **HERE drive time**, negotiating with the Route agent. This fixes straight-line ranking and the ETA mismatch: B estimated 4 min, HERE said 1 min.
+  - Escalation owns the **deadline sweep** (needs B's `/deadlines/sweep`).
+- **Pitch line:** each agent maps to a real-world party with its own trust boundary. The LLM is used only for language. Every life-safety decision stays deterministic in B, with reason codes.
+
+### 000.7 Route map image: A renders, **B hosts** (ask)
+**A (done, `integrations/map_image.py`):**
+- After a volunteer accepts and B's post-check says `ILLUSTRATIVE_ONLY`, the Route agent calls the **HERE Map Image API v3** server-side (the key never leaves A's process).
+- Overlays: the route as a flexible-polyline `line` (blue), ORDER zones and official closures as translucent `polygon`s, and labelled Start / Pickup / Shelter `point`s.
+- The image auto-fits with `padding=48`; a PNG is about 80 KB at 640x400.
+- One HERE call per accepted assignment, cached, counted in the daily cap.
+- HERE gotchas: polygon rings must be closed; polygons accept only `color` (`#rrggbbaa`); `outline-*` on a polygon returns HTTP 400 E622002.
+
+**Ask for B: host the PNG at a public https URL** (ASI:One loads `hero_image` straight from the viewer's browser, so it can't send auth headers):
+- `PUT /maps/{map_id}` (`X-Agent-Token`; the network token or a new `ROUTE_AGENT_TOKEN`), body `image/png` ≤ 300 KB → `{"url": "https://<public-host>/maps/{map_id}.png", "expires_at": …}`.
+  - `map_id` is chosen by A: `secrets.token_urlsafe(24)`, unguessable.
+  - Optional body field or query `assignment_id`, so B can expire maps with the assignment.
+- `GET /maps/{map_id}.png`: public, no auth, `Content-Type: image/png`, `Cache-Control: private, max-age=3600`, `X-Robots-Tag: noindex`, **404 after expiry**. Expiry: 24 h or when the assignment is completed or cancelled.
+- No listing endpoint, and never log the map id with personal data. **The map shows the pickup point**, so A sends the URL only to the assigned volunteer, after Accept (synthetic data only in the demo).
+- The backend must be reachable at a **public https host** for the demo. Set `PUBLIC_BASE_URL` (B's deploy). Until then A shows the route as text only. If no deploy is planned, A can run an ngrok tunnel serving only the maps folder as a fallback.
+
+### 000.8 A's next steps
+1. The Route agent renders the map → `PUT /maps/{id}` → `RouteResponse.map_url` → `hero_image` on the volunteer's trip card (as soon as B's endpoint exists).
+2. Refresh buttons on info cards; only remember direct-chat sessions (ignore the built-in assistant).
+3. Matching re-rank by HERE drive time; coordinator card to approve self-registered volunteers; Calamity → `/deadlines/sweep`.
+4. Three-account demo (resident, volunteer, coordinator), then a thin LangGraph over the same actions.
+
+### 000.9 Asks and questions for B (consolidated; stand-ins exist in `tests/integration/fake_v2_backend.py`)
+**Endpoints:**
+1. `POST /link`: one-time codes → link an ASI:One address (rev 4).
+2. `POST /register`: create + link in one call (rev 5).
+3. `POST /orgs/{org}/volunteers/{vid}/approve`: coordinator approves self-registered volunteers.
+4. `POST /organizations/{org}/invites` → one-time invite code that `/link` accepts (rev 6). Optional: batch `POST …/volunteers`.
+5. `PUT /maps/{id}` + `GET /maps/{id}.png` (§000.7), and a **public https deploy** of the backend.
+6. `POST /deadlines/sweep`: the 15-minute reply deadline (rev 4 amendment).
+7. Accept the **linked ASI:One sender** on resident replies (today A maps it to `sim_phone_*`).
+
+**Small fixes:**
+- align `ROUTE_MAX_AVOID_AREAS` to HERE's 20;
+- clear `NETWORK_AGENT_TOKEN` in unit tests;
+- move demo coordinates off real street addresses where possible.
+
+**Questions:**
+- Where will the backend be deployed for judging (host, https), and can it serve `/maps` there?
+- Should the ETA shown to people come from HERE's route when there is one, instead of B's estimate? Live they disagreed: 4 min vs 1 min.
+- Should B rank by drive time if A sends it, or should the Matching agent re-rank (§000.6)?
+- Do you agree imported volunteers are approved by default because the org vouches, while self-registered ones are not?
+- Is a 24 h map expiry and a ≤ 300 KB size OK?
 
 ## 00. Revision 5 (2026-10-18, proposed by A, pending B's agreement): self-registration in ASI:One
 

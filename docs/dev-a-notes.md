@@ -219,3 +219,9 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   - an ngrok tunnel serving only a maps folder (demo);
   - a public bucket or CDN.
   - The URL must be unguessable: the map shows the pickup point.
+
+### Decision: B hosts the route map image (2026-10-18)
+- We're not using ngrok. **A renders** the PNG (HERE Map Image v3, server-side); **B hosts** it at a public https URL.
+- Spec: team plan §000.7 (`PUT /maps/{map_id}` with an agent token; public `GET /maps/{map_id}.png`; unguessable id; 24 h or assignment-end expiry; `noindex`).
+- The URL goes only to the assigned volunteer, after Accept.
+- All open asks and questions for B are consolidated in team plan **§000.9** (revision 6).
