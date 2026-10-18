@@ -480,9 +480,10 @@ class Journey:
         card = self.journey_card(case_id, res.get("resident_status"), note=how)
         for person in (volunteer, resident):
             if person is not None and person is not by:
-                await self.send_to(ctx, person.address, card)
-        if by is not None and by.role != "COORDINATOR":
+                await self.send_to(ctx, person.address, self.person_card(case_id, person, res.get("resident_status"), how))
+        if by is not None and by.role != "COORDINATOR":  # the person who confirmed last gets their own card
             await self.push(ctx, card)
+            return self.person_card(case_id, by, res.get("resident_status"), how)
         return card
 
     async def confirm_arrival(self, ctx: Context, case_id: str, corr: str) -> Reply:
@@ -509,12 +510,28 @@ class Journey:
                                         help_types=DEFAULT_HELP_TYPES)
         resident = self.people.resident_for_case(case_id)
         volunteer = self.people.volunteer(a["volunteer_id"])
+        note = "Arrival confirmed by shelter check-in."
         if volunteer:
-            await self.send_to(ctx, volunteer.address, card)
+            await self.send_to(ctx, volunteer.address, self.person_card(case_id, volunteer, res.get("resident_status"), note))
         if resident:  # consent is the resident's to give, in their own chat
-            await self.send_to(ctx, resident.address, card, consent)
+            await self.send_to(ctx, resident.address, self.person_card(case_id, resident, res.get("resident_status"), note),
+                               consent)
             return [card, f"Asked {resident.display_name} in their own chat whether they want further help."]
         return [card, consent]
+
+    def person_card(self, case_id: str, person: Link, status: str | None, note: str) -> Card:
+        """What a volunteer or resident sees at pickup/arrival: their own next step, never the
+        coordinator's case card (no coordinator buttons, no other people's details)."""
+        shelter = (self.case(case_id).proposal or {}).get("site_id") or "the agreed shelter"
+        nxt = {("VOLUNTEER", "PICKUP_CONFIRMED"): f"Drive to {shelter}. The shelter confirms the arrival.",
+               ("VOLUNTEER", "ARRIVAL_CONFIRMED"): "Your assignment is complete. Thank you for helping (simulated).",
+               ("RESIDENT", "PICKUP_CONFIRMED"): f"You're on the way to {shelter}.",
+               ("RESIDENT", "ARRIVAL_CONFIRMED"): "You've arrived. You can ask for further help below."}
+        who = NAMES.get(case_id, case_id) if person.role == "VOLUNTEER" else "you"
+        rows = [("Status", status or "-"), ("What happened", note),
+                ("Next", nxt.get((person.role, status or ""), "A coordinator will follow up.")),
+                ("Note", "This is a simulation, not an emergency service. In a real emergency call 911.")]
+        return info_card(f"Trip update · {who}", rows, f"Trip update ({status}):", "Doorstep journey")
 
     async def case_map(self, case_id: str, corr: str, step_response: dict[str, Any]) -> dict[str, str]:
         """Status color/label always from B: the step response if it has one, else the case record."""

@@ -227,7 +227,8 @@ async def route(ctx: Context, text: str, correlation_id: str, sender: str = ""):
     if MENTION.sub("", text).strip().lower() == "unlink":  # demo control: start over in this chat
         journey.subscribers.discard(sender)
         removed = journey.people.remove(ctx, sender)
-        return ("This chat is no longer linked (demo). " if removed else "This chat wasn't linked. ") +             "You can LINK <code> or register again."
+        return ("This chat is no longer linked (demo). " if removed else "This chat wasn't linked. ") + (
+            "You can LINK followed by your code, or register again.")
     link = journey.people.get(ctx, sender)
     if link is None:
         reg = await registration_route(ctx, sender, text, selection, correlation_id)

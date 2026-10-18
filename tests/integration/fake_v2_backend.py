@@ -1,17 +1,22 @@
 """B's REAL app for A's integration tests (contract v2.1, in-memory Mongo), plus ONE
-stand-ins for routes B hasn't built yet: `POST /link` (rev 4, contract v2.2 ask) and
-`POST /register` (rev 5; it calls B's real registration routes). Delete them when B
-ships them; tests must keep passing against B.
+stand-ins for routes B hasn't built yet: `POST /link` (rev 4, contract v2.2 ask),
+`POST /register` (rev 5; it calls B's real registration routes) and
+`POST /organizations/{org}/invites` (one-time volunteer invite codes for an org's bulk
+roster import, scripts/import_volunteers.py). Delete them when B ships them; tests must
+keep passing against B.
 Never used outside tests and `scripts/dev_backend_v2.py` (DEV ONLY).
 """
 
 from typing import Any
 
+import secrets
+
 import httpx
-from fastapi import APIRouter, Header, Request
+from fastapi import APIRouter, Depends, Header, Request
 from fastapi.responses import JSONResponse
 
 from doorstep.api.app import create_app
+from doorstep.api.security import require_demo_token
 from doorstep.workflows.backend_v2 import DEFAULT_NETWORK_TOKEN, DoorstepBackendV2, doorstep_agent_token
 
 TOKEN = "change-me-local-demo-token"
@@ -33,9 +38,25 @@ LINK_CODES = {
 }
 
 
-def build_link_standin(spent: dict[str, str]) -> APIRouter:
+def build_link_standin(spent: dict[str, str], invites: dict[str, dict[str, Any]] | None = None) -> APIRouter:
     r = APIRouter()
     state_counter: list[str] = []
+    invites = {} if invites is None else invites
+
+    @r.post("/organizations/{org_id}/invites", dependencies=[Depends(require_demo_token)])
+    async def invite(org_id: str, request: Request):
+        """One-time code an org hands to a volunteer it imported; `LINK <code>` in ASI:One
+        links that person's account to the existing volunteer record (no self-registration)."""
+        body = await request.json()
+        if not body.get("volunteer_id"):
+            return JSONResponse(status_code=422, content={"error": "VALIDATION", "detail": "volunteer_id required"})
+        prefix = org_id.split("_")[0].upper()[:12] or "ORG"
+        code = f"{prefix}-{secrets.randbelow(9000) + 1000}"
+        while code in LINK_CODES or code in invites:
+            code = f"{prefix}-{secrets.randbelow(9000) + 1000}"
+        invites[code] = {"role": "VOLUNTEER", "volunteer_id": body["volunteer_id"], "org_id": org_id,
+                         "display_name": body.get("display_name") or body["volunteer_id"]}
+        return JSONResponse(status_code=201, content={"schema_version": "2.0", "code": code, **invites[code]})
 
     @r.post("/link")
     async def link(request: Request, x_agent_token: str | None = Header(default=None)):
@@ -43,12 +64,13 @@ def build_link_standin(spent: dict[str, str]) -> APIRouter:
             return JSONResponse(status_code=401, content={"error": "UNAUTHORIZED", "detail": "Doorstep agent token"})
         body = await request.json()
         code, address = str(body.get("code", "")).upper(), body.get("asi_one_address")
-        if code not in LINK_CODES:
+        entry = LINK_CODES.get(code) or invites.get(code)
+        if entry is None:
             return JSONResponse(status_code=409, content={"error": "UNKNOWN_CODE", "detail": "unknown link code"})
         if code in spent:  # works once, even from the same address
             return JSONResponse(status_code=409, content={"error": "CODE_SPENT", "detail": "code already used"})
         spent[code] = address
-        return {"schema_version": "2.0", "asi_one_address": address, **LINK_CODES[code]}
+        return {"schema_version": "2.0", "asi_one_address": address, **entry}
 
     @r.post("/register")
     async def register(request: Request, x_agent_token: str | None = Header(default=None)):
@@ -86,8 +108,8 @@ def build_link_standin(spent: dict[str, str]) -> APIRouter:
 def build_v2_app(db_path: str | None = ":memory:"):
     """B's real app + the `/link` stand-in in front. Returns (app, state)."""
     app = create_app(db_path, seed=True)
-    state: dict[str, Any] = {"spent_codes": {}}
-    for route in reversed(build_link_standin(state["spent_codes"]).routes):
+    state: dict[str, Any] = {"spent_codes": {}, "invites": {}}
+    for route in reversed(build_link_standin(state["spent_codes"], state["invites"]).routes):
         app.router.routes.insert(0, route)
     return app, state
 

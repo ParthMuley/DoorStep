@@ -171,3 +171,20 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   - Test: `test_pushes_go_out_on_the_persons_chat_session`.
 - **Limit:** after an agent restart, a person must send one message before pushes reach them (the session is held in memory only).
 - **Tests:** 246 pass, 2 skipped.
+
+### Bulk volunteer roster import + live match as a volunteer (2026-10-18)
+- **Import:**
+  - `scripts/import_volunteers.py <csv> --org <org> --region <region>` → `workflows/roster_import.py`.
+  - Each CSV row becomes a volunteer via B's real `POST /regions/{r}/orgs/{o}/volunteers`. Rows are validated first; a bad row doesn't stop the rest. Re-importing reports `EXISTS` and never overwrites.
+  - Each imported volunteer gets a one-time invite code; they type `LINK <code>` in ASI:One.
+  - Imported volunteers are approved by default (the org vouches for its roster); `approved=no` per row.
+  - Sample roster: `scripts/rosters/eastside_rides_demo.csv` (5 synthetic volunteers).
+- **Ask for B:** `POST /organizations/{org}/invites` → `{code}`, a one-time code that `POST /link` accepts. A stand-in is in `tests/integration/fake_v2_backend.py`. Optionally a batch volunteer endpoint.
+- **Live run (ASI:One, real agents on Agentverse):**
+  - Imported 5 volunteers; the browser account linked as Alex with its invite code.
+  - Alert → Alex's "Are you available?" card → Yes.
+  - Coordinator matched Maria: **Alex #1 at 0.3 km**. Jordan, Priya, Sam and Kim were rejected with B's reason codes (no wheelchair space, pet capacity, awaiting reply, not approved).
+  - Approve → assignment card in Alex's chat (codes and area only) → Accept → live HERE route (avoided the order zone and the official closure) plus the pickup card → two-party pickup → arrival → GREEN.
+- **Fixed after the run:** volunteers and residents now get a "Trip update" card with their own next step at pickup and arrival, not the coordinator's case card with its coordinator buttons. Also fixed the UNLINK reply wording: ASI:One swallowed "<code>" as an HTML tag.
+- **ASI:One behaviour:** every agent message that arrives before the person's next message is folded into one bubble (newest text first, last card only), even minutes apart. Keep each person's updates few and self-contained.
+- **Tests:** `tests/integration/test_roster_import.py`; 248 pass.

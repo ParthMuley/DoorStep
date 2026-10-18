@@ -1,0 +1,6 @@
+volunteer_id,name,lat,lon,vehicle_type,vehicle_seats,wheelchair_spaces,pet_capacity,needs_they_can_cater,approved
+vol_eastside_alex,Alex (synthetic),34.0990,-118.0950,WHEELCHAIR_VAN,3,1,2,1;2;4;5;8,yes
+vol_eastside_jordan,Jordan (synthetic),34.0975,-118.0990,SEDAN,3,0,1,4;7,yes
+vol_eastside_priya,Priya (synthetic),34.0960,-118.1010,MINIVAN,5,1,0,1;2;8,yes
+vol_eastside_sam,Sam (synthetic),34.0940,-118.1060,WHEELCHAIR_VAN,2,1,1,1;2;4,yes
+vol_eastside_kim,Kim (synthetic),34.0950,-118.1000,SUV,4,0,2,4;5,no
