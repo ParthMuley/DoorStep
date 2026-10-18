@@ -11,16 +11,10 @@ from doorstep.integrations.agentverse_setup import agentverse_api_key, enable_au
 
 PROFILES = Path(__file__).parent / "profiles"
 
-# Default ports (override with <ROLE>_PORT). Org agents use ORG_PORT_BASE + index.
+# Default ports (override with <ROLE>_PORT).
 DEFAULT_PORTS = {"COORDINATOR": 8101, "TRANSPORT": 8102, "DESTINATION": 8103, "CALAMITY": 8104,
-                 "MATCHING": 8105, "ESCALATION": 8106, "POSTCALAMITY": 8107, "NEWS": 8108, "ROUTE": 8109}
-ORG_PORT_BASE = 8111
-DEMO_ORGS = ["eastside_rides_demo", "neighbor_sedans_demo", "red_cross_demo", "civic_shelter_demo",
-             "recovery_housing_demo"]
-
-
-def org_env_key(org_id: str) -> str:
-    return org_id.upper()
+                 "MATCHING": 8105, "ESCALATION": 8106, "POSTCALAMITY": 8107, "NEWS": 8108, "ROUTE": 8109,
+                 "NETWORK": 8110}
 
 
 def seed_for(env_name: str) -> str:
@@ -38,13 +32,6 @@ def address_for(role: str) -> str:
     if explicit:
         return explicit
     return Identity.from_seed(seed_for(f"{role}_SEED"), 0).address
-
-
-def org_address(org_id: str) -> str:
-    explicit = os.getenv(f"ORG_AGENT_ADDRESS_{org_env_key(org_id)}", "").strip()
-    if explicit:
-        return explicit
-    return Identity.from_seed(seed_for(f"ORG_SEED_{org_env_key(org_id)}"), 0).address
 
 
 def build_agent(name: str, seed: str, port: int, profile: str, description: str) -> Agent:

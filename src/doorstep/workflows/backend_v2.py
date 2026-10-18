@@ -1,8 +1,8 @@
-"""Contract v2.0 calls (docs/interface-contract.md §5) for A's agents.
+"""Contract v2.0/v2.1 calls (docs/interface-contract.md §5; team plan rev 3) for A's agents.
 
 Same transport, auth, correlation and error handling as v1 (`DoorstepBackend`); v1
-methods are removed in the switch-over PR window. Org-scoped routes send
-`X-Org-Agent: <org_id>` so an organization agent can only reach its own org's data.
+methods are removed in the switch-over PR window. Rev 3: one Volunteer Network agent
+acts for all partner orgs; every write names its `org_id` and B checks it.
 """
 
 from typing import Any
@@ -17,10 +17,6 @@ class DoorstepBackendV2(DoorstepBackend):
     def _v2(correlation_id: str, **fields: Any) -> dict[str, Any]:
         return {"schema_version": V2, "correlation_id": correlation_id,
                 **{k: v for k, v in fields.items() if v is not None}}
-
-    @staticmethod
-    def _org(org_id: str) -> dict[str, str]:
-        return {"X-Org-Agent": org_id}
 
     # ---- alerts (Calamity Checker)
     async def ingest_alerts(self, source: dict[str, Any], fetch_ok: bool, http_status: int | None,
@@ -41,24 +37,21 @@ class DoorstepBackendV2(DoorstepBackend):
     async def alert_outreach(self, alert_id: str, correlation_id: str) -> dict[str, Any]:
         return await self._request("GET", f"/alerts/{alert_id}/outreach", correlation_id)
 
-    # ---- organizations (Organization agents; org-scoped)
-    async def start_outreach(self, org_id: str, alert_id: str, idempotency_key: str,
-                             correlation_id: str) -> dict[str, Any]:
-        return await self._request("POST", f"/orgs/{org_id}/outreach", correlation_id,
-                                   self._v2(correlation_id, alert_id=alert_id, idempotency_key=idempotency_key),
-                                   extra_headers=self._org(org_id))
+    # ---- volunteer network (rev 3: alert-scoped, location-first; no per-org agents)
+    async def regions_near(self, correlation_id: str, zone_id: str | None = None) -> dict[str, Any]:
+        return await self._request("GET", "/regions/near", correlation_id,
+                                   params={"zone_id": zone_id} if zone_id else None)
 
-    async def org_volunteers(self, org_id: str, correlation_id: str, alert_id: str | None = None) -> dict[str, Any]:
-        params = {"alert_id": alert_id} if alert_id else None
-        return await self._request("GET", f"/orgs/{org_id}/volunteers", correlation_id, params=params,
-                                   extra_headers=self._org(org_id))
+    async def start_outreach(self, alert_id: str, idempotency_key: str, correlation_id: str) -> dict[str, Any]:
+        return await self._request("POST", f"/alerts/{alert_id}/outreach", correlation_id,
+                                   self._v2(correlation_id, idempotency_key=idempotency_key))
 
-    async def record_availability(self, org_id: str, volunteer_id: str, alert_id: str, available: bool,
+    async def record_availability(self, alert_id: str, volunteer_id: str, org_id: str, available: bool,
                                   responded_at: str, idempotency_key: str, correlation_id: str) -> dict[str, Any]:
         return await self._request(
-            "POST", f"/orgs/{org_id}/volunteers/{volunteer_id}/availability", correlation_id,
-            self._v2(correlation_id, alert_id=alert_id, available=available, responded_at=responded_at,
-                     idempotency_key=idempotency_key), extra_headers=self._org(org_id))
+            "POST", f"/alerts/{alert_id}/volunteers/{volunteer_id}/availability", correlation_id,
+            self._v2(correlation_id, org_id=org_id, available=available, responded_at=responded_at,
+                     idempotency_key=idempotency_key))
 
     # ---- matching + assignments
     async def propose_match(self, case_id: str, create_proposal: bool, idempotency_key: str, correlation_id: str,
@@ -74,7 +67,7 @@ class DoorstepBackendV2(DoorstepBackend):
                         site_id: str | None = None) -> dict[str, Any]:
         return await self._request("POST", f"/assignments/{assignment_id}/accept", correlation_id, self._v2(
             correlation_id, org_id=org_id, volunteer_id=volunteer_id, site_id=site_id, decision=decision,
-            idempotency_key=idempotency_key), extra_headers=self._org(org_id))
+            idempotency_key=idempotency_key))
 
     async def pickup_v2(self, assignment_id: str, evidence: dict[str, Any], idempotency_key: str,
                         correlation_id: str) -> dict[str, Any]:
@@ -108,8 +101,7 @@ class DoorstepBackendV2(DoorstepBackend):
     async def respond_recovery(self, referral_id: str, org_id: str, decision: str, idempotency_key: str,
                                correlation_id: str, evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         return await self._request("POST", f"/recovery/{referral_id}/respond", correlation_id, self._v2(
-            correlation_id, org_id=org_id, decision=decision, evidence=evidence, idempotency_key=idempotency_key),
-            extra_headers=self._org(org_id))
+            correlation_id, org_id=org_id, decision=decision, evidence=evidence, idempotency_key=idempotency_key))
 
     # ---- card data
     async def dashboard_summary(self, correlation_id: str) -> dict[str, Any]:

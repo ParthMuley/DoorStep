@@ -1,5 +1,5 @@
 """V2 agents over uAgents messaging (in-process Bureau, offline), against B's real app
-plus the contract-shaped stand-ins in fake_v2_backend.py."""
+plus the contract-shaped stand-ins in fake_v2_backend.py (team plan rev 3)."""
 
 import asyncio
 from typing import Any, Awaitable, Callable
@@ -9,8 +9,8 @@ from uagents import Agent, Context
 from doorstep.agents.calamity_checker import CalamityChecker
 from doorstep.agents.escalation import build_escalation_protocol
 from doorstep.agents.matching import build_matching_protocol
-from doorstep.agents.organization import build_org_protocol
 from doorstep.agents.post_calamity import build_post_calamity_protocol
+from doorstep.agents.volunteer_network import build_network_protocol
 from doorstep.integrations.fetch_messages import (
     AcceptRequest,
     AcceptResponse,
@@ -34,24 +34,21 @@ from tests.integration.conftest import make_agent, run_until
 from tests.integration.fake_v2_backend import make_v2_backend
 
 MARIA, DAVID = "case_maria_001", "case_david_002"
-ORGS = ["eastside_rides_demo", "red_cross_demo", "civic_shelter_demo", "recovery_housing_demo"]
-
-
-def org_agents() -> dict[str, Agent]:
-    return {org: make_agent(f"org_{org}") for org in ORGS}
-
-
-def wire_orgs(agents: dict[str, Agent], backend) -> None:
-    for org, agent in agents.items():
-        agent.include(build_org_protocol(org, lambda: backend))
 
 
 def m(**fields) -> dict[str, Any]:
     return {"correlation_id": "corr_v2_test", "created_at": utc_now(), **fields}
 
 
+def network_agent(backend) -> Agent:
+    agent = make_agent("volunteer_network")
+    agent.include(build_network_protocol(lambda: backend))
+    return agent
+
+
 async def drive(agents: list[Agent], script: Callable[[Context, dict], Awaitable[None]]) -> dict:
-    """Run `script` from a driver agent (playing the Doorstep agent) inside one Bureau."""
+    """Run `script` from a driver agent (playing the Doorstep agent) inside one Bureau.
+    Backend calls must happen inside the script: the Bureau's shutdown cancels later awaits."""
     driver = make_agent("doorstep_driver")
     out: dict[str, Any] = {"driver": driver}
     done = asyncio.Event()
@@ -73,24 +70,32 @@ async def ask(ctx: Context, address: str, message, response_type):
     return reply
 
 
-async def test_org_outreach_reads_and_writes_real_volunteer_records(monkeypatch):
-    orgs = org_agents()
-    backend, _ = make_v2_backend(monkeypatch, {o: a.address for o, a in orgs.items()})
-    wire_orgs(orgs, backend)
+async def ingest(backend) -> str:
+    await backend.trigger_alert("ISSUE", "corr", preset="ZONE_3_WILDFIRE")
+    feed = await backend._request("GET", "/demo/feeds/caloes", "corr")
+    res = await backend.ingest_alerts({"source_id": "SYNTHETIC_CALOES", "source_type": "OFFICIAL_SIMULATION",
+                                       "url": "x", "fetched_at": utc_now()}, True, 200, None, feed, "k1", "corr")
+    return res["outreach_orgs"][0]["alert_id"]
+
+
+async def test_network_outreach_nearest_orgs_first(monkeypatch):
+    backend, _ = make_v2_backend(monkeypatch)
+    network = network_agent(backend)
 
     async def script(ctx, out):
-        for org in ("eastside_rides_demo", "red_cross_demo"):
-            out[org] = await ask(ctx, orgs[org].address, OutreachRequest(
-                **m(alert_id="alert_001", calamity_type="WILDFIRE", idempotency_key=f"alert_001:outreach:{org}")),
-                OutreachResult)
-        # The answer really landed in B's org DB (B's real endpoint), scoped to that org.
-        out["vols"] = (await backend.org_volunteers("eastside_rides_demo", "corr", alert_id="alert_001"))["volunteers"]
+        alert_id = await ingest(backend)
+        out["result"] = await ask(ctx, network.address, OutreachRequest(
+            **m(alert_id=alert_id, calamity_type="WILDFIRE", idempotency_key=f"{alert_id}:outreach")), OutreachResult)
+        out["status"] = await backend.alert_outreach(alert_id, "corr")
 
-    out = await drive(list(orgs.values()), script)
-    east, rc = out["eastside_rides_demo"], out["red_cross_demo"]
-    assert east.asked == ["volunteer_sarah"] and east.available == ["volunteer_sarah"]
-    assert set(rc.available) == {"volunteer_lee"} and "volunteer_maya" in rc.awaiting_reply  # NO_REPLY never = available
-    assert out["vols"][0]["availability"]["state"] == "AVAILABLE"
+    out = await drive([network], script)
+    orgs = {o["org_id"]: o for o in out["result"].orgs}
+    assert [o["org_id"] for o in out["result"].orgs] == ["neighbor_sedans_demo", "eastside_rides_demo",
+                                                         "red_cross_demo"]  # nearest region first
+    assert orgs["eastside_rides_demo"]["available"] == ["volunteer_sarah"]
+    assert orgs["eastside_rides_demo"]["region_id"] == "la_county:zone_2"
+    assert "volunteer_maya" in orgs["red_cross_demo"]["awaiting_reply"]  # NO_REPLY never = available
+    assert {o["org_id"]: o["available"] for o in out["status"]["orgs"]}["red_cross_demo"] == 1
 
 
 async def test_calamity_checker_ingests_and_notifies_once(monkeypatch):
@@ -100,15 +105,10 @@ async def test_calamity_checker_ingests_and_notifies_once(monkeypatch):
     async def fetch(url):
         return True, 200, await backend._request("GET", "/demo/feeds/caloes", "corr"), None
 
-    checker_agent = make_agent("calamity")
+    checker_agent, driver = make_agent("calamity"), make_agent("doorstep_driver")
+    checker_agent.include(CalamityChecker(lambda: backend, fetch, coordinator_address=lambda: driver.address)
+                          .protocol(3600))
     notifications: list[AlertNotification] = []
-    driver_box: dict = {}
-
-    # Protocols must be included before the Bureau starts, so build the checker up front.
-    checker = CalamityChecker(lambda: backend, fetch, coordinator_address=lambda: driver_box["addr"])
-    checker_agent.include(checker.protocol(3600))
-    driver = make_agent("doorstep_driver")
-    driver_box["addr"] = driver.address
     done = asyncio.Event()
 
     @driver.on_message(AlertNotification)
@@ -117,7 +117,7 @@ async def test_calamity_checker_ingests_and_notifies_once(monkeypatch):
 
     @driver.on_event("startup")
     async def go(ctx: Context):
-        for _ in range(3):
+        for _ in range(3):  # three identical polls -> one notification
             await ctx.send(checker_agent.address, PollNow(**m()))
             await asyncio.sleep(0.7)
         done.set()
@@ -127,7 +127,8 @@ async def test_calamity_checker_ingests_and_notifies_once(monkeypatch):
     note = notifications[0]
     assert {a["status"] for a in note.new_alerts} == {"WARNING", "ORDER"}
     assert {c["case_id"] for c in note.affected_cases} == {MARIA, DAVID}
-    assert [o["org_id"] for o in note.outreach_orgs][0] == "neighbor_sedans_demo"  # closest first
+    assert note.outreach_orgs[0]["org_id"] == "neighbor_sedans_demo"  # closest region first
+    assert "agent_address" not in note.outreach_orgs[0]  # rev 3: no per-org agents
 
 
 async def test_calamity_checker_reports_failed_fetch_and_backs_off(monkeypatch):
@@ -152,49 +153,41 @@ async def test_calamity_checker_reports_failed_fetch_and_backs_off(monkeypatch):
     assert checker.failures == 2 and checker.skip_ticks == 1
 
 
-async def ingest_and_outreach(backend, orgs_to_ask=("eastside_rides_demo", "red_cross_demo")):
-    await backend.trigger_alert("ISSUE", "corr", preset="ZONE_3_WILDFIRE")
-    feed = await backend._request("GET", "/demo/feeds/caloes", "corr")
-    res = await backend.ingest_alerts({"source_id": "SYNTHETIC_CALOES", "source_type": "OFFICIAL_SIMULATION",
-                                       "url": "x", "fetched_at": utc_now()}, True, 200, None, feed, "k1", "corr")
-    alert_id = res["outreach_orgs"][0]["alert_id"]
-    for org in orgs_to_ask:
-        await backend.start_outreach(org, alert_id, f"{alert_id}:outreach:{org}", "corr")
-    await backend.record_availability("eastside_rides_demo", "volunteer_sarah", alert_id, True, utc_now(), "a1", "corr")
-    await backend.record_availability("red_cross_demo", "volunteer_lee", alert_id, True, utc_now(), "a2", "corr")
-    return alert_id
-
-
-async def test_maria_match_accept_pickup_arrival_over_agents(monkeypatch):
-    orgs = org_agents()
-    matching = make_agent("matching")
-    backend, _ = make_v2_backend(monkeypatch, {o: a.address for o, a in orgs.items()})
-    wire_orgs(orgs, backend)
+async def test_maria_match_accept_pickup_arrival_via_network(monkeypatch):
+    backend, _ = make_v2_backend(monkeypatch)
+    network, matching = network_agent(backend), make_agent("matching")
     matching.include(build_matching_protocol(lambda: backend))
-    await ingest_and_outreach(backend)
 
     async def script(ctx, out):
+        alert_id = await ingest(backend)
+        await ask(ctx, network.address, OutreachRequest(
+            **m(alert_id=alert_id, calamity_type="WILDFIRE", idempotency_key=f"{alert_id}:outreach")), OutreachResult)
         res = await ask(ctx, matching.address, MatchRequest(**m(case_id=MARIA, create_proposal=True,
                                                                  idempotency_key=f"{MARIA}:match:v1")), MatchResult)
         out["match"] = res
         match = res.result["match"]
         aid = match["assignment_id"]
-        out["vol"] = await ask(ctx, match["org_agent_address"], AcceptRequest(**m(
+        out["vol"] = await ask(ctx, network.address, AcceptRequest(**m(
             case_id=MARIA, assignment_id=aid, org_id=match["org_id"], role="VOLUNTEER",
             volunteer_id=match["volunteer_id"], shared_with_volunteer=match["shared_with_volunteer"],
             idempotency_key=f"{aid}:accept:{match['volunteer_id']}")), AcceptResponse)
-        out["shelter"] = await ask(ctx, match["shelter_agent_address"], AcceptRequest(**m(
+        out["shelter"] = await ask(ctx, network.address, AcceptRequest(**m(
             case_id=MARIA, assignment_id=aid, org_id=match["shelter_org_id"], role="SHELTER",
             site_id=match["site_id"], idempotency_key=f"{aid}:accept:{match['site_id']}")), AcceptResponse)
-        out["pickup"] = await ask(ctx, match["org_agent_address"], ReportRequest(
+        out["pickup"] = await ask(ctx, network.address, ReportRequest(
             **m(kind="PICKUP", case_id=MARIA, assignment_id=aid)), {PickupReport, ReportUnavailable})
-        out["wrong"] = await ask(ctx, match["shelter_agent_address"], ReportRequest(
-            **m(kind="PICKUP", case_id=MARIA, assignment_id=aid)), {PickupReport, ReportUnavailable})
-        out["arrival"] = await ask(ctx, match["shelter_agent_address"], ReportRequest(
+        out["arrival"] = await ask(ctx, network.address, ReportRequest(
             **m(kind="ARRIVAL", case_id=MARIA, assignment_id=aid)), {ArrivalReport, ReportUnavailable})
-        out["aid"] = aid
+        out["unknown"] = await ask(ctx, network.address, ReportRequest(
+            **m(kind="PICKUP", case_id=MARIA, assignment_id="assign_999")), {PickupReport, ReportUnavailable})
+        ev = {"type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True, "resident_confirmed": True,
+              "source": "SIMULATED", "report_id": out["pickup"].report_id}
+        out["picked"] = await backend.pickup_v2(aid, ev, "p1", "corr")
+        out["arrived"] = await backend.arrival_v2(aid, {
+            "type": "SHELTER_CHECKIN", "shelter_org_id": "civic_shelter_demo", "site_id": "dest_center_a",
+            "shelter_confirmed": True, "source": "SIMULATED", "report_id": out["arrival"].report_id}, "a1", "corr")
 
-    out = await drive([matching, *orgs.values()], script)
+    out = await drive([network, matching], script)
     match = out["match"].result["match"]
     assert out["match"].ok and match["volunteer_id"] == "volunteer_sarah"
     rejected = out["match"].result["evaluation"]["volunteers"]["rejected"]
@@ -203,40 +196,52 @@ async def test_maria_match_accept_pickup_arrival_over_agents(monkeypatch):
     assert "pickup_details" not in out["vol"].backend  # pickup point never travels back to Doorstep
     assert out["shelter"].decision == "ACCEPTED"
     assert isinstance(out["pickup"], PickupReport) and out["pickup"].volunteer_id == "volunteer_sarah"
-    assert isinstance(out["wrong"], ReportUnavailable)
     assert isinstance(out["arrival"], ArrivalReport) and out["arrival"].site_id == "dest_center_a"
-    # Doorstep forwards the reports to B; acceptance != pickup != arrival.
-    ev = {"type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True, "resident_confirmed": True,
-          "source": "SIMULATED", "report_id": out["pickup"].report_id}
-    assert (await backend.pickup_v2(out["aid"], ev, "p1", "corr"))["resident_status"] == "PICKUP_CONFIRMED"
-    arr = await backend.arrival_v2(out["aid"], {"type": "SHELTER_CHECKIN", "shelter_org_id": "civic_shelter_demo",
-                                                "site_id": "dest_center_a", "shelter_confirmed": True,
-                                                "source": "SIMULATED", "report_id": out["arrival"].report_id},
-                                   "a1", "corr")
-    assert arr["resident_status"] == "ARRIVAL_CONFIRMED" and arr["map"]["color"] == "green"
+    assert isinstance(out["unknown"], ReportUnavailable)
+    assert out["picked"]["resident_status"] == "PICKUP_CONFIRMED"
+    assert out["arrived"]["resident_status"] == "ARRIVAL_CONFIRMED" and out["arrived"]["map"]["color"] == "green"
 
 
 async def test_volunteer_decline_names_next_alternate_and_is_idempotent(monkeypatch):
     monkeypatch.setenv("DECLINE_VOLUNTEERS", "volunteer_sarah")
-    orgs = org_agents()
-    backend, _ = make_v2_backend(monkeypatch, {o: a.address for o, a in orgs.items()})
-    wire_orgs(orgs, backend)
-    await ingest_and_outreach(backend)
-    proposal = await backend.propose_match(MARIA, True, f"{MARIA}:match:v1", "corr")
-    aid = proposal["match"]["assignment_id"]
+    backend, _ = make_v2_backend(monkeypatch)
+    network = network_agent(backend)
 
     async def script(ctx, out):
+        alert_id = await ingest(backend)
+        await ask(ctx, network.address, OutreachRequest(
+            **m(alert_id=alert_id, calamity_type="WILDFIRE", idempotency_key=f"{alert_id}:outreach")), OutreachResult)
+        proposal = await backend.propose_match(MARIA, True, f"{MARIA}:match:v1", "corr")
+        aid = proposal["match"]["assignment_id"]
         req = AcceptRequest(**m(case_id=MARIA, assignment_id=aid, org_id="eastside_rides_demo", role="VOLUNTEER",
                                 volunteer_id="volunteer_sarah", idempotency_key=f"{aid}:accept:volunteer_sarah"))
-        out["first"] = await ask(ctx, orgs["eastside_rides_demo"].address, req, AcceptResponse)
-        out["again"] = await ask(ctx, orgs["eastside_rides_demo"].address, req, AcceptResponse)
+        out["first"] = await ask(ctx, network.address, req, AcceptResponse)
+        out["again"] = await ask(ctx, network.address, req, AcceptResponse)
+        out["next"] = await backend.propose_match(MARIA, True, f"{MARIA}:match:v2", "corr",
+                                                  select_volunteer_id="volunteer_lee")
 
-    out = await drive(list(orgs.values()), script)
+    out = await drive([network], script)
     assert out["first"].decision == "DECLINED"
     assert out["first"].backend["next_alternate"] == {"org_id": "red_cross_demo", "volunteer_id": "volunteer_lee"}
     assert out["again"].created_at == out["first"].created_at  # duplicate request -> same stored answer
-    nxt = await backend.propose_match(MARIA, True, f"{MARIA}:match:v2", "corr", select_volunteer_id="volunteer_lee")
-    assert nxt["match"]["volunteer_id"] == "volunteer_lee"
+    assert out["next"]["match"]["volunteer_id"] == "volunteer_lee"
+
+
+async def test_wrong_org_for_volunteer_is_refused(monkeypatch):
+    backend, _ = make_v2_backend(monkeypatch)
+    network = network_agent(backend)
+
+    async def script(ctx, out):
+        alert_id = await ingest(backend)
+        await ask(ctx, network.address, OutreachRequest(
+            **m(alert_id=alert_id, calamity_type="WILDFIRE", idempotency_key=f"{alert_id}:outreach")), OutreachResult)
+        aid = (await backend.propose_match(MARIA, True, f"{MARIA}:match:v1", "corr"))["match"]["assignment_id"]
+        out["wrong"] = await ask(ctx, network.address, AcceptRequest(**m(
+            case_id=MARIA, assignment_id=aid, org_id="red_cross_demo", role="VOLUNTEER",
+            volunteer_id="volunteer_sarah", idempotency_key=f"{aid}:accept:wrong")), AcceptResponse)
+
+    out = await drive([network], script)
+    assert out["wrong"].decision == "ERROR" and out["wrong"].error["status"] == 403
 
 
 async def test_david_escalation_is_receipt_only(monkeypatch):
@@ -260,12 +265,10 @@ async def test_david_escalation_is_receipt_only(monkeypatch):
     assert out["ack"].assistance_confirmed is False
 
 
-async def test_post_calamity_referrals_to_recovery_org_agents(monkeypatch):
-    orgs = org_agents()
-    post = make_agent("post_calamity")
-    backend, _ = make_v2_backend(monkeypatch, {o: a.address for o, a in orgs.items()})
-    wire_orgs(orgs, backend)
-    post.include(build_post_calamity_protocol(lambda: backend))
+async def test_post_calamity_referrals_answered_via_network(monkeypatch):
+    backend, _ = make_v2_backend(monkeypatch)
+    network, post = network_agent(backend), make_agent("post_calamity")
+    post.include(build_post_calamity_protocol(lambda: backend, network_address=lambda: network.address))
 
     async def script(ctx, out):
         out["ok"] = await ask(ctx, post.address, RecoveryRequest(**m(
@@ -276,7 +279,7 @@ async def test_post_calamity_referrals_to_recovery_org_agents(monkeypatch):
             case_id=MARIA, help_types=["TEMPORARY_HOUSING"], share_recovery_needs=False, granted_by="RESIDENT",
             idempotency_key=f"{MARIA}:recovery:v2")), RecoveryResponse)
 
-    out = await drive([post, *orgs.values()], script)
+    out = await drive([post, network], script)
     ok = out["ok"]
     assert {(r["help_type"], r["org_id"], r["status"]) for r in ok.referrals} == {
         ("TEMPORARY_HOUSING", "recovery_housing_demo", "ACCEPTED"), ("INSURANCE_GUIDANCE", "red_cross_demo", "ACCEPTED")}

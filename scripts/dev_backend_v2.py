@@ -19,11 +19,9 @@ os.environ.setdefault("SIMULATION_MODE", "true")
 
 import uvicorn  # noqa: E402
 
-from doorstep.agents.base import DEMO_ORGS, org_address  # noqa: E402
 from tests.integration.fake_v2_backend import build_v2_app  # noqa: E402
 
 if __name__ == "__main__":
-    addresses = {org: org_address(org) for org in DEMO_ORGS}
-    app, _ = build_v2_app(addresses)
+    app, _ = build_v2_app()
     print("DEV backend (B's app + v2 test double) - SIMULATION ONLY")
     uvicorn.run(app, host="127.0.0.1", port=int(os.getenv("DOORSTEP_API_PORT", "8000")))

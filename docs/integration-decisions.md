@@ -95,3 +95,11 @@ No in-memory FakeBackend: B's real app runs in-process for tests (`httpx.ASGITra
 - David: no match `ORDER_ZONE` → escalate → Escalation agent `ACKNOWLEDGED_REQUEST_ONLY`, unresolved.
 
 Transcript: `var/logs/journey_probe.txt` (local, not committed).
+
+## uagents pitfall: concurrent `send_and_receive` to one agent (2026-10-17)
+
+`ctx.send_and_receive` matches the reply by (sender, destination, session). Two **concurrent** calls from one handler to the **same** destination collide: one reply is lost and that call times out. We found this when per-org agents became one Volunteer Network agent (approve sent volunteer + shelter acceptance in parallel; Post-Calamity sent referrals in parallel). Calls to the same agent are now sequential. Concurrent calls to *different* agents are fine.
+
+## Rev 3 live run (2026-10-17)
+
+The same journey ran live with **one Volunteer Network agent** instead of 5 org agents. The Outreach card lists orgs by region, nearest first (`neighbor_sedans_demo · la_county:zone_3 (0.9 km)`, `eastside_rides_demo · la_county:zone_2 (4.1 km)`, `red_cross_demo · la_county:zone_4 (7.9 km)`). The Agentverse account still holds stale agents (`Agent limit reached 10/8`), so the Volunteer Network and Calamity Checker ran on local endpoints (`LOCAL_ONLY_AGENTS`).

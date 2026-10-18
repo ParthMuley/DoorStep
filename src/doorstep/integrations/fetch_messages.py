@@ -47,14 +47,12 @@ class OutreachRequest(_Msg):
 
 
 class OutreachResult(_Msg):
-    org_id: str
+    """Volunteer Network agent's outreach summary for one alert, per organization
+    (nearest region first): {org_id, name, region_id, distance_km, asked, available,
+    unavailable, awaiting_reply (volunteer ID lists), skipped}."""
     alert_id: str
-    asked: list[str]
-    skipped: list[dict[str, Any]]
-    available: list[str]
-    unavailable: list[str]
-    awaiting_reply: list[str]
-    note: str = "Volunteer answers are simulated (DEMO)."
+    orgs: list[dict[str, Any]]
+    note: str = "Volunteer answers are simulated (DEMO). No reply is never treated as available."
 
 
 # --- Doorstep <-> Matching agent

@@ -4,8 +4,8 @@ words come from B or from the other agents' replies; nothing here decides eligib
 zones, consent or safety.
 
 Flow: start check -> (Calamity agent) AlertNotification -> push Alert card + outreach
-to org agents -> push Outreach card -> resident reply (simulated) -> Matching agent ->
-Match card -> approve -> org agents accept (volunteer + shelter) -> Help on the way ->
+via the Volunteer Network agent (orgs nearest the zone) -> push Outreach card -> resident reply (simulated) -> Matching agent ->
+Match card -> approve -> Volunteer Network forwards volunteer + shelter acceptance -> Help on the way ->
 pickup report -> arrival report (green) -> recovery consent -> Post-Calamity agent.
 David: no match (order zone) -> escalate -> Escalation agent (receipt only).
 
@@ -77,7 +77,7 @@ class Journey:
         self.get_backend, self.address_for = get_backend, address_for
         self.subscribers: set[str] = set()
         self.last_alert: AlertNotification | None = None
-        self.outreach: dict[str, OutreachResult] = {}
+        self.outreach: OutreachResult | None = None
         self.cases: dict[str, CaseJourney] = {}
 
     def case(self, case_id: str) -> CaseJourney:
@@ -108,19 +108,19 @@ class Journey:
                 "is polling the feed now; alert and volunteer-outreach cards will appear here automatically.")
 
     async def on_alert(self, ctx: Context, msg: AlertNotification) -> None:
-        """Push the alert to everyone watching, then run volunteer outreach in parallel."""
+        """Push the alert to everyone watching, then ask the Volunteer Network agent to reach
+        the volunteers of the organizations nearest the zone (B picks them by location)."""
         self.last_alert = msg
         await self.push(ctx, self.alert_card(msg))
-        orgs = [o for o in msg.outreach_orgs if o.get("agent_address")]
-        results = await asyncio.gather(*(self.ask(ctx, o["agent_address"], OutreachRequest(
-            correlation_id=msg.correlation_id, created_at=utc_now(), alert_id=o["alert_id"],
-            calamity_type=next((a["calamity_type"] for a in msg.new_alerts if a["alert_id"] == o["alert_id"]),
-                               "UNKNOWN"),
-            idempotency_key=f"{o['alert_id']}:outreach:{o['org_id']}"), OutreachResult) for o in orgs))
-        for org, result in zip(orgs, results):
-            if result is not None:
-                self.outreach[org["org_id"]] = result
-        await self.push(ctx, self.outreach_card(orgs, results))
+        if not msg.outreach_orgs:
+            return
+        alert_id = msg.outreach_orgs[0]["alert_id"]
+        calamity = next((a["calamity_type"] for a in msg.new_alerts if a["alert_id"] == alert_id), "UNKNOWN")
+        result = await self.ask(ctx, self.address_for("NETWORK"), OutreachRequest(
+            correlation_id=msg.correlation_id, created_at=utc_now(), alert_id=alert_id, calamity_type=calamity,
+            idempotency_key=f"{alert_id}:outreach"), OutreachResult)
+        self.outreach = result
+        await self.push(ctx, self.outreach_card(result))
 
     async def push(self, ctx: Context, card: Card | str) -> None:
         for user in list(self.subscribers):
@@ -137,17 +137,18 @@ class Journey:
                          "Calamity Checker agent · SYNTHETIC_CALOES")
 
     @staticmethod
-    def outreach_card(orgs: list[dict], results: list[OutreachResult | None]) -> Card:
-        rows = []
-        for org, r in zip(orgs, results):
-            if r is None:
-                rows.append((org["org_id"], "no answer from the organization's agent (not treated as available)"))
-            else:
-                rows.append((f"{org['org_id']} ({org.get('distance_km')} km)",
-                             f"asked {len(r.asked)} · available {len(r.available)} · "
-                             f"waiting {len(r.awaiting_reply)} · unavailable {len(r.unavailable)}"))
-        return info_card("Volunteer outreach", rows, "Organization agents asked their own volunteers:",
-                         "Organization agents · simulated volunteer replies")
+    def outreach_card(result: OutreachResult | None) -> Card:
+        if result is None:
+            rows = [("Volunteer Network", "no answer yet; no volunteer is treated as available")]
+        else:
+            rows = [(f"{o['org_id']} · {o.get('region_id') or '-'} ({o.get('distance_km')} km)",
+                     f"asked {len(o.get('asked', []))} · available {len(o.get('available', []))} · "
+                     f"waiting {len(o.get('awaiting_reply', []))} · unavailable {len(o.get('unavailable', []))}")
+                    if "error" not in o else ("Outreach", f"failed: {o['error'].get('code')}")
+                    for o in result.orgs]
+        return info_card("Volunteer outreach", rows,
+                         "Volunteer Network asked the volunteers of the organizations nearest the zone:",
+                         "Volunteer Network agent · simulated volunteer replies")
 
     # -------------------------------------------------------- resident reply
     async def simulate_reply(self, case_id: str, corr: str) -> Reply:
@@ -206,10 +207,14 @@ class Journey:
         shelter_req = AcceptRequest(correlation_id=corr, created_at=utc_now(), case_id=case_id, assignment_id=aid,
                                     org_id=p["shelter_org_id"], role="SHELTER", site_id=p["site_id"],
                                     idempotency_key=f"{aid}:accept:{p['site_id']}")
-        vol, shelter = await asyncio.gather(self.ask(ctx, p["org_agent_address"], vol_req, AcceptResponse),
-                                            self.ask(ctx, p["shelter_agent_address"], shelter_req, AcceptResponse))
+        # Sequential on purpose: uagents send_and_receive matches replies by (sender, destination,
+        # session), so two concurrent requests to the same agent from one handler collide.
+        network = self.address_for("NETWORK")
+        vol = await self.ask(ctx, network, vol_req, AcceptResponse)
+        shelter = await self.ask(ctx, network, shelter_req, AcceptResponse)
         if vol is None or vol.decision == "ERROR":
-            return ("The volunteer's organization did not confirm. Help is NOT on the way yet; I will not resend "
+            return ("The volunteer did not confirm (via the Volunteer Network). Help is NOT on the way yet; "
+                    "I will not resend "
                     "blindly. Ask for status in a moment.")
         if vol.decision == "DECLINED":
             nxt = vol.backend.get("next_alternate")
@@ -221,8 +226,7 @@ class Journey:
             if isinstance(card, Card):
                 card.narration = f"{p['volunteer_id']} declined (simulated), no pressure. Next eligible volunteer: " + card.narration
             return card
-        j.accepted = {"assignment_id": aid, "org_agent_address": p["org_agent_address"], "org_id": p["org_id"],
-                      "volunteer_id": p["volunteer_id"], "shelter_agent_address": p["shelter_agent_address"]}
+        j.accepted = {"assignment_id": aid, "org_id": p["org_id"], "volunteer_id": p["volunteer_id"]}
         j.shelter_accepted = bool(shelter and shelter.decision == "ACCEPTED")
         j.steps["PROVIDER_ACCEPTED"] = utc_now()
         j.map = {"color": "yellow", "label": "Volunteer accepted (not yet picked up)"}
@@ -239,11 +243,11 @@ class Journey:
         if not j.accepted:
             return "Pickup can't be confirmed: no volunteer has accepted this case. Nothing was changed."
         a = j.accepted
-        report = await self.ask(ctx, a["org_agent_address"], ReportRequest(
+        report = await self.ask(ctx, self.address_for("NETWORK"), ReportRequest(
             correlation_id=corr, created_at=utc_now(), kind="PICKUP", case_id=case_id,
             assignment_id=a["assignment_id"]), {PickupReport, ReportUnavailable})
         if not isinstance(report, PickupReport):
-            return "The volunteer's organization did not report a pickup. Pickup is NOT confirmed."
+            return "No pickup report came back from the Volunteer Network. Pickup is NOT confirmed."
         evidence = {"type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True,
                     "resident_confirmed": True, "caregiver_confirmed": False, "code_verified": report.code_verified,
                     "source": "SIMULATED", "report_id": report.report_id,
@@ -262,7 +266,7 @@ class Journey:
         if not j.accepted or not j.steps["PICKUP_CONFIRMED"]:
             return "Arrival can't be confirmed before a confirmed pickup. Nothing was changed."
         a = j.accepted
-        report = await self.ask(ctx, a["shelter_agent_address"], ReportRequest(
+        report = await self.ask(ctx, self.address_for("NETWORK"), ReportRequest(
             correlation_id=corr, created_at=utc_now(), kind="ARRIVAL", case_id=case_id,
             assignment_id=a["assignment_id"]), {ArrivalReport, ReportUnavailable})
         if not isinstance(report, ArrivalReport):

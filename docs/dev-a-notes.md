@@ -57,3 +57,15 @@ Reviewed `docs/interface-contract.md` v2.0 rev 2 and `docs/DOORSTEP_V2_TEAM_PLAN
   - Pickup evidence marks the resident confirmation as simulated until B answers review item 5.
   - The journey state is in memory; the thin LangGraph step will make it durable.
   - `GET /cases` doesn't reflect v2 assignments until B's v2 lands, so status after acceptance uses the journey card.
+
+### Rev 3: Volunteer Network agent replaces per-org agents (2026-10-17)
+- `agents/volunteer_network.py` is one agent for all partner orgs. Messages name the `org_id`; `OutreachResult` now lists orgs per alert.
+- Removed `agents/organization.py` and the `ORG_SEED_*` settings; added `NETWORK_SEED` and `NETWORK_PORT` (8110).
+- **Test double** (`tests/integration/fake_v2_backend.py`) is on the rev 3 shapes:
+  - `POST /alerts/{id}/outreach`
+  - `POST /alerts/{id}/volunteers/{vid}/availability`
+  - `GET /alerts/{id}/outreach`
+  - `GET /regions/near`
+  - accept and recovery-respond checked by `org_id` in the body; no `X-Org-Agent`, no per-org agent addresses.
+  - The region list is a stand-in until B's geo query lands.
+- **B: contract v2.1 should match these shapes** (or tell A what differs; A adjusts the client in one place, `workflows/backend_v2.py`).

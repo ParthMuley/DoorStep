@@ -2,20 +2,20 @@
 
 After arrival and with the resident's consent, asks B to match recovery organizations
 per help type (temporary housing, insurance guidance, supplies...), then sends each
-matched org's agent only B's consent-scoped `shared_payload` and collects its answer.
+referral (only B's consent-scoped `shared_payload`) to the Volunteer Network agent, which
+answers for the partner organizations, and collects the answers.
 Never files claims or applications and never promises housing (`housing_secured` comes
 from B and is false unless a completed, evidenced referral says otherwise).
 
 Run:  python -m doorstep.agents.post_calamity
 """
 
-import asyncio
 from typing import Any, Callable
 
 from dotenv import load_dotenv
 from uagents import Context, Protocol
 
-from doorstep.agents.base import build_agent, role_port, seed_for
+from doorstep.agents.base import address_for, build_agent, role_port, seed_for
 from doorstep.integrations.fetch_messages import (
     RecoveryRequest,
     RecoveryResponse,
@@ -30,14 +30,13 @@ load_dotenv()
 REFERRAL_TIMEOUT_SECONDS = 20
 
 
-def build_post_calamity_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> Protocol:
+def build_post_calamity_protocol(get_backend: Callable[[], DoorstepBackendV2],
+                                  network_address: Callable[[], str] = lambda: address_for("NETWORK")) -> Protocol:
     proto = Protocol(name="doorstep_post_calamity", version="2.0")
 
     async def refer(ctx: Context, case_id: str, ref: dict[str, Any], corr: str) -> dict[str, Any]:
-        if not ref.get("agent_address"):
-            return {**ref, "status": "REQUESTED", "agent_reply": "NO_AGENT_ADDRESS"}
         reply, status = await ctx.send_and_receive(
-            ref["agent_address"],
+            network_address(),
             ReferralRequest(correlation_id=corr, created_at=utc_now(), referral_id=ref["referral_id"],
                             case_id=case_id, help_type=ref["help_type"], org_id=ref["org_id"],
                             shared_payload=ref["shared_payload"], idempotency_key=f"{ref['referral_id']}:request"),
@@ -58,8 +57,10 @@ def build_post_calamity_protocol(get_backend: Callable[[], DoorstepBackendV2]) -
                 error={"code": getattr(err, "code", type(err).__name__),
                        "detail": getattr(err, "detail", "backend unreachable")}))
             return
-        referrals = await asyncio.gather(*(refer(ctx, msg.case_id, r, corr) for r in result.get("referrals", [])))
-        # Only the minimal fields go back to Doorstep; shared payloads stay with the recovery orgs.
+        # Sequential: all referrals go to the same Volunteer Network agent, and concurrent
+        # send_and_receive calls to one destination from one handler collide (uagents 0.26).
+        referrals = [await refer(ctx, msg.case_id, r, corr) for r in result.get("referrals", [])]
+        # Only the minimal fields go back to Doorstep; shared payloads stay on the referral side.
         summary = [{k: r.get(k) for k in ("referral_id", "help_type", "org_id", "status", "agent_reply")}
                    for r in referrals]
         ctx.logger.info(f"[{corr}] recovery {msg.case_id}: {[(r['help_type'], r['status']) for r in summary]}")

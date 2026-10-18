@@ -1,7 +1,10 @@
-"""Contract-shaped TEST DOUBLE for v2.0 endpoints Developer B hasn't built yet.
+"""Contract-shaped TEST DOUBLE for v2.0/v2.1 (team plan rev 3) endpoints Developer B
+hasn't built yet.
 
-It is B's real app (real orgs, volunteers, registry, auth, X-Org-Agent checks) with
-stand-in routes inserted *in front* for the missing v2 paths. Shapes follow
+It is B's real app (real orgs, volunteers, registry, auth) with stand-in routes
+inserted *in front* for the missing paths. Rev 3: no per-org agents; outreach and
+availability are alert-scoped and done by the Volunteer Network agent; nearby help is
+found by location (regions). Shapes follow
 docs/interface-contract.md v2.0 §5 and the §10 seed IDs. Delete each stand-in as B's
 real route lands; tests that use it must keep passing against B's code.
 Never used outside tests.
@@ -27,9 +30,11 @@ ZONES = {  # zone_id -> (raw Cal OES status, affected case)
 }
 STATUS_MAP = {"evacuation order": "ORDER", "evacuation warning": "WARNING", "shelter in place": "SHELTER_IN_PLACE",
               "normal": "INACTIVE", "clear to repopulate": "INACTIVE"}
-OUTREACH_ORGS = [("neighbor_sedans_demo", "Neighbor Sedans (fictional)", 0.9),
-                 ("eastside_rides_demo", "Eastside Accessible Rides (fictional)", 4.1),
-                 ("red_cross_demo", "Red Cross (fictional demo chapter)", 7.9)]
+# Rev 3 location-first stand-in: regions near Zone 3 (nearest first) -> orgs active there.
+REGIONS = [("la_county:zone_3", 0.9, [("neighbor_sedans_demo", "Neighbor Sedans (fictional)")]),
+           ("la_county:zone_2", 4.1, [("eastside_rides_demo", "Eastside Accessible Rides (fictional)")]),
+           ("la_county:zone_4", 7.9, [("red_cross_demo", "Red Cross (fictional demo chapter)")])]
+OUTREACH_ORGS = [(o, n, d, r) for r, d, orgs in REGIONS for o, n in orgs]
 MARIA_CANDIDATES = [("eastside_rides_demo", "volunteer_sarah", "WHEELCHAIR_VAN", 4.0),
                     ("red_cross_demo", "volunteer_lee", "WHEELCHAIR_VAN", 7.5)]
 RECOVERY_ORGS = {"TEMPORARY_HOUSING": "recovery_housing_demo", "INSURANCE_GUIDANCE": "red_cross_demo"}
@@ -53,7 +58,7 @@ def _feature(zone_id: str, status: str, edit_ms: int, oid: int) -> dict[str, Any
                            "EDIT_DATE": edit_ms, "STATEWIDE_LAST_UPDATED": edit_ms, "GlobalID": f"sim-{oid:04d}"}}
 
 
-def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> APIRouter:
+def build_v2_router(state: dict[str, Any]) -> APIRouter:
     r = APIRouter()
 
     def authed(authorization: str | None) -> bool:
@@ -114,9 +119,9 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
         warning = next((a for a in new_alerts if a["status"] == "WARNING"), None)
         if warning:
             state["warning_alert_id"] = warning["alert_id"]
-        outreach = [{"org_id": o, "name": n, "agent_address": agent_addresses.get(o, ""), "distance_km": d,
+        outreach = [{"org_id": o, "name": n, "region_id": r, "distance_km": d,
                      "calamity_types": ["WILDFIRE"], "alert_id": warning["alert_id"]}
-                    for o, n, d in OUTREACH_ORGS] if (simulated and warning) else []
+                    for o, n, d, r in OUTREACH_ORGS] if (simulated and warning) else []
         return {"schema_version": V2, "ingest_id": ingest_id, "source_id": body["source"]["source_id"],
                 "feed_freshness": "FRESH", "records_received": len(body["payload"]["features"]),
                 "records_rejected": rejected, "new_alerts": new_alerts, "changed_alerts": [],
@@ -125,28 +130,67 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
                 if simulated else [], "outreach_orgs": outreach, "notify_coordinator": bool(new_alerts) and simulated,
                 "duplicate": not new_alerts}
 
-    # --------------------------------------------------------------- outreach
-    @r.post("/orgs/{org_id}/outreach")
-    async def outreach(org_id: str, request: Request, x_org_agent: str | None = Header(default=None),
-                       authorization: str | None = Header(default=None)):
+    # ------------------------------------------------- outreach (rev 3, alert-scoped)
+    def org_volunteers(org_id: str) -> list[dict[str, Any]]:
+        return state["service"].registry.org_volunteers(org_id, None)["volunteers"]
+
+    @r.get("/regions/near")
+    def regions_near(zone_id: str | None = None):
+        return {"schema_version": V2, "zone_id": zone_id, "regions": [
+            {"region_id": rid, "distance_km": d, "orgs": [{"org_id": o, "name": n,
+                                                          "volunteers": len(org_volunteers(o))} for o, n in orgs]}
+            for rid, d, orgs in REGIONS]}
+
+    @r.post("/alerts/{alert_id}/outreach")
+    async def outreach(alert_id: str, request: Request, authorization: str | None = Header(default=None)):
         if not authed(authorization):
             return _err(401, "UNAUTHORIZED", "token")
-        if x_org_agent != org_id:
-            return _err(403, "UNAUTHORIZED", "X-Org-Agent must match the organization in the path")
         body = await request.json()
-        vols = state["service"].registry.org_volunteers(org_id, body["alert_id"])["volunteers"]
-        return {"schema_version": V2, "org_id": org_id, "alert_id": body["alert_id"],
-                "asked": [{"volunteer_id": v["volunteer_id"], "message_id": f"msg_{v['volunteer_id']}"}
-                          for v in vols if v["approved"]],
-                "skipped": [{"volunteer_id": v["volunteer_id"], "reason": "VOLUNTEER_NOT_APPROVED"}
-                            for v in vols if not v["approved"]]}
+        if body["idempotency_key"] in state["outreach_keys"]:
+            return {**state["outreach_keys"][body["idempotency_key"]], "duplicate": True}
+        orgs = []
+        for org_id, name, dist, region_id in OUTREACH_ORGS:
+            vols = org_volunteers(org_id)
+            asked = [v["volunteer_id"] for v in vols if v["approved"]]
+            for vid in asked:
+                state["availability"][(alert_id, vid)] = ("ASKED", org_id)
+            orgs.append({"org_id": org_id, "name": name, "region_id": region_id, "distance_km": dist,
+                         "asked": [{"volunteer_id": v, "message_id": f"msg_{v}"} for v in asked],
+                         "skipped": [{"volunteer_id": v["volunteer_id"], "reason": "VOLUNTEER_NOT_APPROVED"}
+                                     for v in vols if not v["approved"]]})
+        result = {"schema_version": V2, "alert_id": alert_id, "orgs": orgs, "duplicate": False}
+        state["outreach_keys"][body["idempotency_key"]] = result
+        return result
+
+    @r.post("/alerts/{alert_id}/volunteers/{volunteer_id}/availability")
+    async def availability(alert_id: str, volunteer_id: str, request: Request,
+                           authorization: str | None = Header(default=None)):
+        if not authed(authorization):
+            return _err(401, "UNAUTHORIZED", "token")
+        body = await request.json()
+        current = state["availability"].get((alert_id, volunteer_id))
+        if current is None:
+            return _err(409, "STALE_AVAILABILITY", "volunteer was not asked for this alert")
+        if current[1] != body["org_id"]:
+            return _err(403, "UNAUTHORIZED", "volunteer does not belong to this org")
+        status = "AVAILABLE" if body["available"] else "UNAVAILABLE"
+        state["availability"][(alert_id, volunteer_id)] = (status, body["org_id"])
+        return {"schema_version": V2, "volunteer_id": volunteer_id, "alert_id": alert_id, "availability": status}
+
+    @r.get("/alerts/{alert_id}/outreach")
+    def outreach_status(alert_id: str):
+        orgs = []
+        for org_id, name, dist, _ in OUTREACH_ORGS:
+            states = [st for (aid, _vid), (st, o) in state["availability"].items() if aid == alert_id and o == org_id]
+            orgs.append({"org_id": org_id, "name": name, "distance_km": dist, "asked": len(states),
+                         "available": states.count("AVAILABLE"), "unavailable": states.count("UNAVAILABLE"),
+                         "no_reply": states.count("ASKED")})
+        return {"schema_version": V2, "alert_id": alert_id, "orgs": orgs}
 
     # --------------------------------------------------------------- matching
     def available(org_id: str, volunteer_id: str) -> bool:
-        alert_id = state.get("warning_alert_id")
-        vols = state["service"].registry.org_volunteers(org_id, alert_id)["volunteers"]
-        v = next((v for v in vols if v["volunteer_id"] == volunteer_id), None)
-        return bool(v) and v["availability"]["state"] == "AVAILABLE"
+        st = state["availability"].get((state.get("warning_alert_id"), volunteer_id))
+        return bool(st) and st == ("AVAILABLE", org_id)
 
     @r.post("/matches/propose")
     async def propose(request: Request, authorization: str | None = Header(default=None)):
@@ -189,9 +233,8 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
             state["assignments"][aid] = {"case_id": case_id, "org_id": top["org_id"], "volunteer_id": top["volunteer_id"],
                                          "status": "PROPOSED", "shelter_accepted": False, "pickup": False}
             match = {"assignment_id": aid, "status": "PROPOSED", "reserved": True, "org_id": top["org_id"],
-                     "org_agent_address": agent_addresses.get(top["org_id"], ""), "volunteer_id": top["volunteer_id"],
-                     "vehicle_type": top["vehicle_type"], "shelter_org_id": "civic_shelter_demo",
-                     "shelter_agent_address": agent_addresses.get("civic_shelter_demo", ""), "site_id": "dest_center_a",
+                     "volunteer_id": top["volunteer_id"], "vehicle_type": top["vehicle_type"],
+                     "shelter_org_id": "civic_shelter_demo", "site_id": "dest_center_a",
                      "reason_codes": top["reason_codes"], "authorization": "SIMULATED_PREAPPROVED",
                      "route_status": "ILLUSTRATIVE_ONLY",
                      "shared_with_volunteer": {"needs": [1, 2, 4], "pet_count": 1, "language": "es",
@@ -209,16 +252,13 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
         return JSONResponse(status_code=201 if match else 200, content=result)
 
     @r.post("/assignments/{assignment_id}/accept")
-    async def accept(assignment_id: str, request: Request, x_org_agent: str | None = Header(default=None),
-                     authorization: str | None = Header(default=None)):
+    async def accept(assignment_id: str, request: Request, authorization: str | None = Header(default=None)):
         if not authed(authorization):
             return _err(401, "UNAUTHORIZED", "token")
         body = await request.json()
         a = state["assignments"].get(assignment_id)
         if a is None:
             return _err(404, "NOT_FOUND", "assignment")
-        if x_org_agent != body["org_id"]:
-            return _err(403, "UNAUTHORIZED", "X-Org-Agent must match org_id")
         if body.get("site_id"):  # shelter confirms the bed
             if body["org_id"] != "civic_shelter_demo":
                 return _err(403, "UNAUTHORIZED", "wrong shelter org")
@@ -313,18 +353,17 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
             state["ref_seq"] += 1
             rid = f"ref_{state['ref_seq']:03d}"
             state["referrals"][rid] = {"org_id": org, "help_type": help_type}
-            referrals.append({"referral_id": rid, "help_type": help_type, "org_id": org,
-                              "agent_address": agent_addresses.get(org, ""), "status": "REQUESTED",
+            referrals.append({"referral_id": rid, "help_type": help_type, "org_id": org, "status": "REQUESTED",
                               "shared_payload": {"referral_id": rid, "help_type": help_type, "language": "es",
                                                  "needs": [1, 6], "pet_count": 1}})
         return JSONResponse(status_code=201, content={"schema_version": V2, "case_id": case_id, "referrals": referrals,
                                                       "unmatched_help_types": unmatched, "housing_secured": False})
 
     @r.post("/recovery/{referral_id}/respond")
-    async def respond(referral_id: str, request: Request, x_org_agent: str | None = Header(default=None)):
+    async def respond(referral_id: str, request: Request):
         body = await request.json()
         ref = state["referrals"][referral_id]
-        if x_org_agent != ref["org_id"] or body["org_id"] != ref["org_id"]:
+        if body["org_id"] != ref["org_id"]:
             return _err(403, "UNAUTHORIZED", "only the referred org can respond")
         status = {"ACCEPTED": "ACCEPTED", "DECLINED": "UNRESOLVED", "COMPLETED": "COMPLETED"}[body["decision"]]
         return {"schema_version": V2, "referral_id": referral_id, "status": status, "housing_secured": False}
@@ -332,23 +371,24 @@ def build_v2_router(state: dict[str, Any], agent_addresses: dict[str, str]) -> A
     return r
 
 
-def build_v2_app(agent_addresses: dict[str, str] | None = None, db_path: str | None = ":memory:"):
+def build_v2_app(db_path: str | None = ":memory:"):
     """B's real app + v2 stand-ins in front. Also used by scripts/dev_backend_v2.py (DEV ONLY)."""
     app = create_app(db_path, seed=True)
     state: dict[str, Any] = {"features": [], "edit": 1_792_281_600_000, "seen": set(), "ingests": 0, "alert_seq": 0,
                              "proposals": {}, "declined": {}, "assignments": {}, "assign_seq": 0, "esc_seq": 0,
-                             "escalations": {}, "ref_seq": 0, "referrals": {}, "service": app.state.service}
+                             "escalations": {}, "ref_seq": 0, "referrals": {}, "service": app.state.service,
+                             "availability": {}, "outreach_keys": {}}
     state["cases_created"] = False
-    router = build_v2_router(state, agent_addresses or {})
+    router = build_v2_router(state)
     for route in reversed(router.routes):
         app.router.routes.insert(0, route)
     return app, state
 
 
-def make_v2_backend(monkeypatch, agent_addresses: dict[str, str] | None = None) -> tuple[DoorstepBackendV2, dict]:
+def make_v2_backend(monkeypatch) -> tuple[DoorstepBackendV2, dict]:
     """In-process client for tests. Returns (client, state)."""
     monkeypatch.setenv("SIMULATION_MODE", "true")
     monkeypatch.delenv("DEMO_AUTH_TOKEN", raising=False)
-    app, state = build_v2_app(agent_addresses)
+    app, state = build_v2_app()
     client = DoorstepBackendV2(base_url="http://backend.test", token=TOKEN, transport=httpx.ASGITransport(app=app))
     return client, state
