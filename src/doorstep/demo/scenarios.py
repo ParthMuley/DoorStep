@@ -247,6 +247,8 @@ def run_scenario_a_v2(client, log=print) -> dict[str, Any]:
                      json={"org_id": "civic_shelter_demo", "site_id": "dest_center_a", "decision": "ACCEPTED"}))
     log("V2-6 volunteer accepted (resident told help is on the way, ETA is an estimate); shelter bed confirmed")
 
+    run_routes_v2(client, aid, log)
+
     # Resident side by SMS (Maria texts RECOGIDO), volunteer side from the PickupReport.
     _ok(client.post("/sim/inbound", json={"sender": seed.MARIA_SENDER, "text": "RECOGIDO", "external_id": "v2-pickup"}))
     p = _ok(client.post(f"/assignments/{aid}/pickup", json={"evidence": {
@@ -282,6 +284,54 @@ def run_scenario_a_v2(client, log=print) -> dict[str, Any]:
     _check(final["recovery"]["housing_secured"], "case view shows recovery")
     log("V2-A PASS\n" + final["summary_text"])
     return final
+
+
+# Mock HERE polylines (the Route agent would get these from HERE Routing v8).
+ROUTE_THROUGH_RIDGE = {"type": "LineString", "coordinates": [[-118.110, 34.095], [-118.0964, 34.1012],
+                                                             [-118.082, 34.098], [-118.070, 34.089]]}
+ROUTE_AVOIDING_RIDGE = {"type": "LineString", "coordinates": [[-118.110, 34.095], [-118.0964, 34.1012],
+                                                              [-118.093, 34.089], [-118.070, 34.089]]}
+
+
+def run_routes_v2(client, aid: str, log=print) -> dict[str, Any]:
+    """News agent ingests closures; Route agent asks for constraints, B post-checks HERE's line."""
+    official = client.get("/demo/feeds/closures").json()["closures"]
+    _ok2(client.post("/closures/ingest", json={
+        "source": {"source_id": "SYNTHETIC_OFFICIAL_CLOSURES", "source_type": "OFFICIAL_SIMULATION"},
+        "items": [{"source_item_id": c["closure_id"], "published_at": c["published_at"], "expires_at": c["expires_at"],
+                   "headline": f"{c['road_name']} {c['status']} (SIMULATED)", "extraction_method": "STRUCTURED_FEED",
+                   "candidate": {"road_name": c["road_name"], "claimed_status": c["status"]}} for c in official],
+        "idempotency_key": "official-1"}))
+    news = client.get("/demo/feeds/news").json()["items"]
+    _ok2(client.post("/closures/ingest", json={
+        "source": {"source_id": "SYNTHETIC_NEWS", "source_type": "NEWS"},
+        "items": [{"source_item_id": n["item_id"], "published_at": n["published_at"], "headline": n["headline"],
+                   "raw_text": n["body"], "extraction_method": "ASI_ONE_EXTRACTION",
+                   "candidate": {"road_name": "Canyon Rd", "claimed_status": "CLOSED"}} for n in news],
+        "idempotency_key": "news-1"}))
+    closures = {c["road_name"]: c for c in _ok2(client.get("/closures"))["closures"]}
+    _check(closures["Ridge Ave"]["state"] == "OFFICIAL_CONFIRMED" and closures["Ridge Ave"]["used_for_routing"],
+           "official closure blocks the road")
+    _check(closures["Canyon Rd"]["state"] == "UNVERIFIED_REPORT" and not closures["Canyon Rd"]["used_for_routing"],
+           "news report is a caution, never a block")
+    log("V2-6b closures: Ridge Ave OFFICIAL_CONFIRMED (blocks), Canyon Rd UNVERIFIED_REPORT (caution)")
+
+    c1 = _ok2(client.post("/routes/constraints", json={"assignment_id": aid, "idempotency_key": f"{aid}:route:1"}))
+    kinds = sorted(a["kind"] for a in c1["avoid_areas"])
+    _check(kinds == ["OFFICIAL_CLOSURE", "ORDER_ZONE"] and len(c1["cautions"]) == 1, "avoid order zone + official")
+    bad = _ok2(client.post("/routes/previews", json={"route_request_id": c1["route_request_id"], "provider": "HERE",
+                                                     "polyline": ROUTE_THROUGH_RIDGE, "distance_m": 4100,
+                                                     "duration_s": 540}))
+    _check(bad["status"] == "REFUSED" and bad["crosses"], "a line through an official closure is refused")
+    c2 = _ok2(client.post("/routes/constraints", json={"assignment_id": aid, "idempotency_key": f"{aid}:route:2"}))
+    good = _ok2(client.post("/routes/previews", json={"route_request_id": c2["route_request_id"], "provider": "HERE",
+                                                      "polyline": ROUTE_AVOIDING_RIDGE, "distance_m": 4600,
+                                                      "duration_s": 660}))
+    _check(good["status"] == "ILLUSTRATIVE_ONLY" and good["cautions_on_path"] and good["label"].startswith("ILLUSTRATIVE"),
+           "illustrative route with a caution for the unverified report")
+    log(f"V2-6c route: through Ridge Ave REFUSED; detour ILLUSTRATIVE_ONLY, ETA ~{good['eta']['minutes']} min "
+        "(estimate), caution on Canyon Rd")
+    return good
 
 
 def run_scenario_b_v2(client, log=print) -> dict[str, Any]:

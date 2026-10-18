@@ -4,12 +4,13 @@
 - no agent per organization: one Volunteer Network agent serves all partner orgs;
 - the partner database becomes location-first (`region → orgs → volunteers`), so finding the closest help to an evacuation zone is one geo query.
 
-**Revision 4 (2026-10-17, proposed by A, pending B's agreement):**
+**Revision 4 (2026-10-17, proposed by A, agreed by B on 2026-10-18 with the amendments in §0.5, which A confirms):**
 - residents and volunteers use **their own ASI:One accounts** instead of simulated SMS;
 - the **Route agent** design is fixed (HERE Routing v8, avoid areas from B only, B post-check);
-- §17 explains how to get a HERE API key.
+- §17 explains how to get a HERE API key;
+- B's amendments (§0.5): the sender address must come from the authenticated Doorstep agent, the demo link codes are public, and a 15-minute reply deadline applies.
 
-See §0 (rev 4) and §0b (rev 3).*
+See §0 (rev 4), §0.5 (amendments) and §0b (rev 3).*
 
 ## 0. What changed in revision 4 (and why)
 
@@ -66,6 +67,26 @@ Route agent → RouteResponse → Doorstep → route card to the volunteer (+ su
 3. Inbound answers arrive through the existing endpoints with `sender` = the linked ASI:One address (B checks it against `contact.address`; unknown sender → 403): resident replies (`/cases/{id}/responses`) and volunteer availability (`/alerts/{id}/volunteers/{vid}/availability`).
 4. **Resident pickup confirmation:** `POST /assignments/{id}/pickup` accepts `{"evidence": {…, "resident_confirmed": true, "confirmations": [{"party": "resident", "party_id": "resident_001", "via": "ASI_ONE"}]}}` when the click comes from the resident's linked address. This settles review item 5.
 5. `communication_status` adds `NOT_REACHABLE` (never linked); still never treated as danger or safety.
+
+### 0.5 Amendments (proposed by B on 2026-10-18 when agreeing to rev 4; A to confirm)
+1. **The sender address comes only from the Doorstep agent.**
+   - The ASI:One address on `POST /link` and on inbound answers (`sender`) is the address of the chat the message really arrived from. The Doorstep agent reads it from the message envelope and never from text the user typed (typing "I am Maria" or pasting an address proves nothing).
+   - The Doorstep agent authenticates to B with `X-Agent-Token: DOORSTEP_AGENT_TOKEN`. B refuses `POST /link` and any request that carries a `sender` without it (401), and refuses a sender that doesn't match the person's linked `contact.address` (403).
+   - Other agents never send a `sender`. They only ask Doorstep to notify people.
+2. **The demo link codes are public.**
+   - The seeded one-time codes (`MARIA-4821`, `SARAH-7310`, `COORD-1150`, …) are in the repo, so anyone reading it can see them.
+   - That's acceptable for a synthetic demo, and it's documented in the README and the contract as a known limitation.
+   - A code works once (a second use gets a 409, even from the same address). `POST /demo/reset` reissues the codes.
+   - A real deployment would issue codes out of band (through the partner org) and expire them.
+3. **A 15-minute reply deadline** (`REPLY_DEADLINE_MINUTES`, default 15). Every check-in and availability request stores `reply_by = asked_at + 15 min`.
+   - **Volunteer, no answer by `reply_by`:** availability becomes `NO_REPLY`, which matching treats as **not available** (reason code `NO_REPLY`). Matching moves on to the next eligible volunteer.
+   - **Resident, no answer by `reply_by`:** `communication_status` becomes `NO_REPLY_AFTER_DEADLINE`, and the case joins the coordinator's unresolved queue with the next step "follow up". It **never** means safe or "no help needed": silence is not evidence of danger or of safety.
+   - **Late answers still count.** A resident replying at minute 20 is handled normally. A volunteer saying YES at minute 20 becomes `AVAILABLE` again while the alert is still active, but an assignment already given to someone else is not taken back.
+   - **No automatic SMS fallback.** The simulator is used only for people whose contact channel is `SIM` (not linked), and in tests. Any other fallback needs both of us to agree first.
+   - **How it runs:**
+     - B applies the deadline whenever it reads the data (case, outreach, matching, dashboard), so it holds even if no agent is running.
+     - `POST /deadlines/sweep` (Doorstep or Calamity Checker token) applies it to everything at once and returns a `notify` list for the coordinator. The **Calamity Checker calls it on its 2-minute poll**, so cards update without anyone asking.
+     - The existing `/sim/…/deadline` demo buttons stay, so the demo doesn't have to wait 15 minutes.
 
 
 ## 0b. What changed in revision 3 (and why)
@@ -133,8 +154,9 @@ Route agent → RouteResponse → Doorstep → route card to the volunteer (+ su
 | | Done | Changes with revision 2 |
 |---|---|---|
 | A | Done on `feat/fetch-agents` @ 4b578d2 (live on Agentverse, 7 of 8 agents on mailboxes):<br>• Doorstep drives the full V2 journey from ASI:One (alert push, outreach, match, approve, accept, pickup, arrival, recovery, David escalation) with cards and ASI:One tool calling<br>• Calamity Checker, Volunteer Network (rev 3), Matching, Escalation, Post-Calamity, News (ASI:One claim extraction) agents<br>• tested against B's app + a contract-shaped test double for routes not yet built | Still to do: Route agent (HERE, §0.3); rev 4 account linking + role cards; switch from the test double to B's real v2.1 routes; thin LangGraph |
-| B | Done on `feat/backend-geodata` @ 27e6295:<br>• MongoDB (2 DBs, mongomock tests, real-server test)<br>• B2 registration + needs codes<br>• B3 Cal OES-shaped feed, `/alerts/ingest`, Shapely geofencing, STALE/UNKNOWN, outreach list, volunteer outreach<br>• B4 `/matches/propose`, reservation, accept/decline, v2 pickup/shelter check-in, escalate + ack, Scenarios A/B/C v2 (158 unit tests)<br>• contract v2.1 written for rev 3 | Still to do: move partners to location-first `regions` + the v2.1 network endpoints (replacing the per-org ones), resident pickup SMS, `PUT /agents/{role}`; then B5 post-calamity, B6 closures + routes, B7 card data |
-| Open issue | 4 of A's agent tests time out on B's machine | check together first |
+| B (older status, see the row below) | Done on `feat/backend-geodata` @ 27e6295:<br>• MongoDB (2 DBs, mongomock tests, real-server test)<br>• B2 registration + needs codes<br>• B3 Cal OES-shaped feed, `/alerts/ingest`, Shapely geofencing, STALE/UNKNOWN, outreach list, volunteer outreach<br>• B4 `/matches/propose`, reservation, accept/decline, v2 pickup/shelter check-in, escalate + ack, Scenarios A/B/C v2 (158 unit tests)<br>• contract v2.1 written for rev 3 | Still to do: move partners to location-first `regions` + the v2.1 network endpoints (replacing the per-org ones), resident pickup SMS, `PUT /agents/{role}`; then B5 post-calamity, B6 closures + routes, B7 card data |
+| **B (2026-10-18)** | Done on `feat/backend-geodata` @ `37426f9`:<br>• B1–B4 as above, now on location-first `regions` (2dsphere + Shapely), v2.1 network endpoints, `PUT /agents/{role}`, resident pickup SMS<br>• B5 post-calamity referrals (consent, nearest recovery org per help type, evidence for COMPLETED, next alternate on decline)<br>• B6 closures (official / unverified / conflicting, gazetteer) + `/routes/constraints` and `/routes/previews` post-check, ETA update<br>• B7 `/dashboard/summary`, `/dashboard/cases`, `progress_steps`, `/health` 2.1.0, README<br>• 196 unit tests, smoke test (v2 Scenarios A/B/C), real-MongoDB test | Still to do: **B8 (rev 4, contract v2.2 + §0.5)**; remove the v1 routes when A removes its v1 client and test; Spanish review |
+| Next joint step | A's double still stands in for closures, routes and the dashboard, which are now live in B's app | drop the test double for those; run C3–C5 on B's real backend |
 
 ## 4. Agents (all uAgents on Agentverse, owned by A)
 
@@ -307,6 +329,11 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
   - News.
   - Route (HERE v8, §0.3), with the route card for the volunteer.
   - Rev 4: account linking + role cards in the Doorstep agent (§0.1–0.2); Volunteer Network asks Doorstep to message volunteers.
+  - §0.5: the Doorstep agent takes `sender` only from the message envelope and sends `X-Agent-Token: DOORSTEP_AGENT_TOKEN`; the Calamity Checker calls `POST /deadlines/sweep` every poll and forwards the returned `notify` list to Doorstep.
+- **A7 — housekeeping:**
+  - Add `NETWORK_AGENT_TOKEN`, `DOORSTEP_AGENT_TOKEN`, `MONGODB_PARTNERS_DB` and `REPLY_DEADLINE_MINUTES=15` to `.env.example` (the dependencies are already added).
+  - Point the agent tests at B's real routes for closures, routes and the dashboard instead of the test double.
+  - Remove the v1 `backend_client.py` and its test in the same PR window in which B removes the v1 routes (§6.2).
   - Post-Calamity (done).
   - Escalation (done).
   - All 8 on Agentverse with profiles, which fits the account's 8-agent cap.
@@ -333,13 +360,20 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
 - **B4 — matching + states:** decision 7, explained reason codes, volunteer reservation, accept/decline, next volunteer on decline, escalation + ack, Scenario C.
 - **B5 — post-calamity:** help types, consent-scoped referral payload, recovery-org matching by `recovery_services`, accepted/completed with evidence.
 - **B6 — closures + routes:** feeds, `/closures/ingest` with deterministic states and a road gazetteer; `/routes/constraints` (volunteer → resident → shelter, avoid order zones + official closures, cautions for unverified, refuse if stale or too many areas) and `/routes/previews` post-check.
-- **B8 — rev 4 (contract v2.2, §0.4):** ASI:One contact channel + link codes + `POST /link`; `notify` lists instead of simulated SMS on the main path; inbound answers checked against the linked address; resident pickup confirmation; `NOT_REACHABLE`. The simulator stays for `SIM` contacts and tests.
 - **B7 — card data, API, scripts, docs:**
   - `/dashboard/*`, `progress_steps`, `summary_text`.
   - Scenarios A, B, C + outreach + route refusal in `demo/scenarios.py`.
   - `smoke_test.sh` with mongomock or a local Mongo; no Fetch/HERE/ASI:One keys.
   - Update `dev-b-notes.md`, `decisions.md`, README.
   - Spanish templates reviewed by a fluent speaker.
+- *B0–B7 are done (see §3); the Spanish review still needs a fluent speaker.*
+- **B8 — rev 4 (contract v2.2, §0.4 + §0.5), next:**
+  1. Contract v2.2 in `docs/interface-contract.md`: the `contact` field, `POST /link`, `notify` lists, the `sender` check, resident pickup via ASI:One, `NOT_REACHABLE`, `reply_by`, and `POST /deadlines/sweep`.
+  2. Linking: seeded one-time codes for Maria, David, Sarah and a coordinator; a spent or unknown code gets a 409; `DOORSTEP_AGENT_TOKEN` is required.
+  3. `notify` lists instead of simulated SMS for check-ins, volunteer outreach, help on the way and the after-arrival question. People with a `SIM` contact still go through the simulator.
+  4. Sender check (401 without the Doorstep token, 403 on a mismatch), resident pickup confirmation via ASI:One, `NOT_REACHABLE` for people who never linked.
+  5. The 15-minute deadline (§0.5.3): applied whenever data is read, plus `POST /deadlines/sweep`. A volunteer becomes `NO_REPLY` (not available). A resident becomes `NO_REPLY_AFTER_DEADLINE` and goes to the unresolved queue. Late answers count.
+  6. Tests (including a simulated clock for the deadline), smoke test, README, decisions, dev-b-notes.
 
 ## 12. Checkpoints
 
@@ -349,7 +383,7 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
 | C2 | client on v2.1, Calamity agent, Volunteer Network agent | Mongo port, location-first regions + geo query, registration, ingest + geofence, outreach | alert → check-ins + volunteer outreach near the zone, end to end |
 | C3 | Matching, accept via the Volunteer Network agent, cards for match/case | matching, reservation, evidence | **Maria matched, accepted, picked up, arrived in ASI:One** |
 | C4 | Escalation + Post-Calamity agents | escalation ack, recovery referrals | **David unresolved; Maria post-calamity referral** |
-| C5 | News + Route (HERE) agents, road conditions + **volunteer route card**, account linking + role cards | closures, route constraints + post-check, FREEZE_FEED, contract v2.2 (link, notify) | **three teammates on three ASI:One accounts run Maria end to end; route avoids the official closure and cautions on the unverified one; refusal; Scenario C** |
+| C5 | News + Route (HERE) agents, road conditions + **volunteer route card**, account linking + role cards | closures, route constraints + post-check, FREEZE_FEED, contract v2.2 (link, notify, sender check, 15-min deadline + sweep) | **three teammates on three ASI:One accounts run Maria end to end; a volunteer who doesn't answer becomes NO_REPLY and the next one is asked; route avoids the official closure and cautions on the unverified one; refusal; Scenario C** |
 | C6 | all agents on Agentverse, shared chat, video | README, smoke, reset, Spanish review | **freeze → merge to `main` → rehearse from reset** |
 
 **No-wait rule:** A tests against B's real app in-process (mongomock-backed); B tests API-only with a fake agent caller. HERE and ASI:One are mocked on both sides.
@@ -386,10 +420,10 @@ Deck (each card has a SIMULATION banner, color + text label, a "data as of / sou
 ## 16. Prompts for each Claude Code session
 
 **Developer A:**
-> You are Developer A on Doorstep V2 (Fetch.ai track; Fetch-first everywhere). Read `docs/DOORSTEP_V2_TEAM_PLAN.md` (this plan, revision 3), `docs/interface-contract.md` (v2.1 once B commits it), and the two spec documents; this plan wins on scope. Work on `feat/fetch-agents` in A-owned files only (§6.9). Do A0 first (verify the ASI:One Interactive Cards spec from official sources before building cards). Then switch the backend client to contract v2.0 and build the agents in §4: Doorstep, Calamity Checker, one Volunteer Network agent for all partner orgs (no agent per org), Matching, News, Route (adapt the team's HERE code with the §9 fixes), Post-Calamity, Escalation. Add the LangGraph flow (§10 A3), ASI:One API tool-calling intent with keyword fallback, and the card deck (§8) with text fallback. The LLM never decides eligibility, zones, consent or status. Never invent endpoints, MCP commands or card schemas. Everything simulated and DEMO-labeled. Report commit hashes, payloads, agent URLs and test results at each checkpoint (§12).
+> You are Developer A on Doorstep V2 (Fetch.ai track; Fetch-first everywhere). Read `docs/DOORSTEP_V2_TEAM_PLAN.md` (this plan, revision 4 incl. the §0.5 amendments), `docs/interface-contract.md` (v2.1; v2.2 once B commits it), and the two spec documents; this plan wins on scope. Work on `feat/fetch-agents` in A-owned files only (§6.9). Do A0 first (verify the ASI:One Interactive Cards spec from official sources before building cards). Then switch the backend client to contract v2.0 and build the agents in §4: Doorstep, Calamity Checker, one Volunteer Network agent for all partner orgs (no agent per org), Matching, News, Route (adapt the team's HERE code with the §9 fixes), Post-Calamity, Escalation. Add the LangGraph flow (§10 A3), ASI:One API tool-calling intent with keyword fallback, and the card deck (§8) with text fallback. The LLM never decides eligibility, zones, consent or status. Never invent endpoints, MCP commands or card schemas. Everything simulated and DEMO-labeled. Report commit hashes, payloads, agent URLs and test results at each checkpoint (§12).
 
 **Developer B:**
-> You are Developer B on Doorstep V2 (Fetch.ai track). Read `docs/DOORSTEP_V2_TEAM_PLAN.md` (revision 3), `docs/interface-contract.md`, and the two spec documents. Work on `feat/backend-geodata` in B-owned files only (§6.9). First revise the contract to v2.1 for revision 3 (location-first regions, `/regions/near`, `/alerts/{id}/outreach`, network accept) and send A the hash. Then finish MongoDB storage (two DBs, location-first `regions` documents with 2dsphere indexes + Shapely fallback, §5 shapes, atomic conditional updates, mongomock tests), add needs codes and registration, the Cal-OES-shaped synthetic feed with `/alerts/ingest` + Shapely geofencing + STALE/UNKNOWN + outreach-org selection, volunteer availability per alert, matching against volunteers found by region geo query, with reservation, escalation, post-calamity referrals, closures with deterministic states, route constraints + HERE polyline post-check, card data, and Scenarios A/B/C in API-only tests and the smoke test (no Fetch/HERE/ASI:One keys). Real feed data is display-only. Missing or stale data never means safe.
+> You are Developer B on Doorstep V2 (Fetch.ai track). Read `docs/DOORSTEP_V2_TEAM_PLAN.md` (revision 4 incl. the §0.5 amendments), `docs/interface-contract.md`, and the two spec documents. Work on `feat/backend-geodata` in B-owned files only (§6.9). B0–B7 are done; next is B8 (§11). Originally: first revise the contract to v2.1 for revision 3 (location-first regions, `/regions/near`, `/alerts/{id}/outreach`, network accept) and send A the hash. Then finish MongoDB storage (two DBs, location-first `regions` documents with 2dsphere indexes + Shapely fallback, §5 shapes, atomic conditional updates, mongomock tests), add needs codes and registration, the Cal-OES-shaped synthetic feed with `/alerts/ingest` + Shapely geofencing + STALE/UNKNOWN + outreach-org selection, volunteer availability per alert, matching against volunteers found by region geo query, with reservation, escalation, post-calamity referrals, closures with deterministic states, route constraints + HERE polyline post-check, card data, and Scenarios A/B/C in API-only tests and the smoke test (no Fetch/HERE/ASI:One keys). Real feed data is display-only. Missing or stale data never means safe.
 
 
 ## 17. Getting a HERE API key (for the Route agent)

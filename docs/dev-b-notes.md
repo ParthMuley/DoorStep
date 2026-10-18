@@ -48,11 +48,19 @@ Responses carry `schema_version: "2.0"`.
 8. Arrival: `POST /assignments/{id}/arrival {"type":"SHELTER_CHECKIN","shelter_org_id","site_id","shelter_confirmed":true}`. Green; the volunteer is released.
 9. David: propose returns `ORDER_ZONE`. Then `POST /cases/{id}/escalate`, then `POST /escalations/{id}/ack` (`AUTO_ESCALATION_ACK=false` when the Escalation agent runs).
 10. Scenario C: `{"action":"FREEZE_FEED","freeze_age_minutes":30}`, then ingest. Zones go STALE and matching refuses.
+10b. Closures + routes (B6), after acceptance:
+    - The News agent reads `GET /demo/feeds/closures` (official) and `GET /demo/feeds/news`, extracts candidates (ASI:One), and posts `POST /closures/ingest {source:{source_id, source_type: OFFICIAL_SIMULATION|NEWS|REAL_WORLD_CONTEXT}, items:[{source_item_id, headline, raw_text, extraction_method, candidate:{road_name, claimed_status}}]}`. B sets the state; `GET /closures` lists them.
+    - The Route agent calls `POST /routes/constraints {assignment_id}` and gets stops, `avoid_areas` (order zones + official closures, as polygons) and `cautions`. It calls HERE, then `POST /routes/previews {route_request_id, polyline, distance_m, duration_s, provider_notices}` → `ILLUSTRATIVE_ONLY` (with ETA) / `REFUSED` / `NO_ROUTE_CONFIRMED`.
+    - Demo control: `POST /demo/closures/trigger {action: PUBLISH_OFFICIAL|LIFT_OFFICIAL|PUBLISH_NEWS, road_name}`.
 11. Post-calamity (B5):
     - After arrival the resident replies `SI` (consent).
     - The Post-Calamity agent calls `POST /cases/{id}/recovery {consent:{share_recovery_needs:true, granted_by:"RESIDENT"}, help_types:["TEMPORARY_HOUSING","INSURANCE_GUIDANCE"]}`. That creates one referral per type, to the nearest org offering it, with a minimal `shared_payload` to forward.
     - The network agent answers for the recovery org: `POST /recovery/{referral_id}/respond {org_id, decision: ACCEPTED|DECLINED|COMPLETED, evidence?}` (network token). COMPLETED needs `{"type":"SIMULATED_SERVICE_CONFIRMED","reference"}`. DECLINED returns `next_alternate`.
     - `GET /cases/{id}` shows a `recovery` block with `status`, `referrals` and `housing_secured`.
+
+**Card data (B7):** `GET /dashboard/summary` (counts, unresolved queue, alerts, outreach, closures, recovery), `GET /dashboard/cases` (coarse locations + progress), and `progress_steps` on `GET /cases/{id}`. `GET /health` reports version 2.1.0 and feed freshness.
+
+**v1 routes:** still mounted for A's old test (`tests/integration/test_fetch_backend_client.py`) and `workflows/backend_client.py`. A's agents no longer call any v1-only endpoint (they use `GET /cases/{id}` and the v2 routes). Remove them in one PR together with A's v1 client and test (plan §6.2).
 
 **Removed (v2.0):** `/organizations/{id}/volunteers`, `/orgs/{id}/volunteers`, `/orgs/{id}/volunteers/{vid}/availability`, `/orgs/{id}/outreach`, `X-Org-Agent`. A's stand-ins for these should switch to the v2.1 routes above.
 
