@@ -117,6 +117,7 @@ Responses carry `schema_version: "2.0"`.
 
 ## Seed (fictional; matches contract Section 5)
 
+- **Two datasets (B-45):** `core` (below; what all tests use) and `full` (core + 8 residents, 8 volunteers, 4 orgs, 2 shelters, flood preset `SOUTH_VALLEY_FLOOD`). `POST /demo/reset {"dataset": "full"}` or `DEMO_DATASET=full` (Render). Every person, code and expected outcome: `docs/demo-cast.md`.
 - `case_maria_001` / `resident_001` "Maria (synthetic)": sender `sim_phone_maria`, `zone_3` sector B (outside the order), Spanish, wheelchair, transfer help, 1 dog, step-free destination.
 - `case_david_002` / `resident_002` "David (synthetic)": sender `sim_phone_david`, caregiver `sim_phone_david_caregiver`, `zone_3` sector A (**active order**), wheelchair.
 - Registry: `transport_org_a` (approved, base zone_2), `transport_org_b` (approved, closer sedan), `transport_org_c` (**not approved**), `transport_org_d`, `transport_org_e` (based behind a closed road); `destination_org_a/b/c`.

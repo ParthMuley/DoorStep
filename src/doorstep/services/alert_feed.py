@@ -28,6 +28,7 @@ def _rect(min_lon: float, min_lat: float, max_lon: float, max_lat: float) -> dic
 # Fictional polygons (see demo/seed.py for resident coordinates).
 ZONE_3_SECTOR_B = _rect(-118.100, 34.098, -118.090, 34.104)  # WARNING, covers Maria
 ZONE_3_SECTOR_A = _rect(-118.100, 34.104, -118.090, 34.110)  # ORDER, covers David (shares an edge with B)
+SOUTH_VALLEY_LOWLANDS = _rect(-118.140, 34.050, -118.120, 34.065)  # FLOOD warning, covers Omar + Dolores (full dataset)
 
 PRESETS: dict[str, dict[str, Any]] = {
     "ZONE_3_WARNING": {"features": [("sim-0001", "zone_3_sector_b", "DEMO Zone 3 Sector B", "Evacuation Warning",
@@ -39,6 +40,12 @@ PRESETS["ZONE_3_WILDFIRE"] = {
     "features": PRESETS["ZONE_3_WARNING"]["features"] + PRESETS["ZONE_3_ORDER"]["features"],
     "incidents": [IncidentPoint(incident_id="inc_001", calamity_type="WILDFIRE", lat=34.1120, lon=-118.0850,
                                 radius_km=5.0, label="DEMO fire origin (synthetic)")],
+}
+# Second use case (full dataset): only flood-capable orgs are asked (Red Cross, Flood Boats, Valley Paratransit).
+PRESETS["SOUTH_VALLEY_FLOOD"] = {
+    "features": [("sim-0003", "south_valley_lowlands", "DEMO South Valley Lowlands", "Evacuation Warning",
+                  SOUTH_VALLEY_LOWLANDS)],
+    "event_type": "Flood (SIMULATED)",
 }
 
 
@@ -71,6 +78,7 @@ class SyntheticFeed:
                 if preset not in PRESETS:
                     raise NotFound(f"Unknown preset {preset!r}; options: {sorted(PRESETS)}")
                 specs = PRESETS[preset]["features"]
+                event_type = event_type or PRESETS[preset].get("event_type")
                 for inc in PRESETS[preset].get("incidents", []):
                     st.incidents = [i for i in st.incidents if i.incident_id != inc.incident_id] + [inc]
             elif zone_id and status:

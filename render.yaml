@@ -34,4 +34,6 @@ services:
         value: "15"
       - key: AUTO_ESCALATION_ACK
         value: "false"                # the Escalation agent acknowledges
+      - key: DEMO_DATASET
+        value: full                   # bigger synthetic cast for the live demo (docs/demo-cast.md); tests use core
       # PUBLIC_BASE_URL is optional: Render sets RENDER_EXTERNAL_URL, which map links use.

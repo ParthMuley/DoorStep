@@ -109,27 +109,30 @@ class DoorstepService:
         self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
-    def reset(self) -> dict[str, Any]:
-        """Wipe and reseed deterministic synthetic data."""
+    def reset(self, dataset: Optional[str] = None) -> dict[str, Any]:
+        """Wipe and reseed deterministic synthetic data. ``dataset``: "core" (tests) or "full" (live demo);
+        default DEMO_DATASET, else core (decision B-45)."""
+        ds = seed.dataset_name(dataset)
         self.db.wipe()
         self.graph = build_demo_graph()
+        orgs, regions, residents = seed.organizations(ds), seed.regions(ds), seed.residents(ds)
         with self.db.tx():
-            for o in seed.organizations():
+            for o in orgs:
                 self.store.partners.save_org(o)
-            for r in seed.regions():
+            for r in regions:
                 self.store.partners.save_region(r)
-            for r in seed.residents():
+            for r in residents:
                 self.store.save_resident_profile(r, legacy_sector=seed.LEGACY_SECTORS.get(r.resident_id))
             for p in seed.provider_registry():
                 self.store.save_registration(p)
             self.db.set_setting("escalation_ack", "true")
+            self.db.set_setting("demo_dataset", ds)
             self.closures.seed_feeds()
-            self.links.seed_codes()
-            self.events.append("DEMO_RESET", case_id=None, data={"simulated": True})
-        regions = seed.regions()
-        return {"status": "reset", "residents": len(seed.residents()), "organizations": len(seed.organizations()),
+            self.links.seed_codes(ds)
+            self.events.append("DEMO_RESET", case_id=None, data={"simulated": True, "dataset": ds})
+        return {"status": "reset", "dataset": ds, "residents": len(residents), "organizations": len(orgs),
                 "regions": len(regions), "volunteers": sum(len(o.volunteers) for r in regions for o in r.orgs),
-                "simulated": True}
+                "link_codes": len(seed.link_codes(ds)), "simulated": True}
 
     def set_escalation_ack(self, acknowledge: bool) -> dict[str, Any]:
         self.db.set_setting("escalation_ack", "true" if acknowledge else "false")

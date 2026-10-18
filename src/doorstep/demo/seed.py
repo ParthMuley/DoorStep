@@ -7,6 +7,7 @@ No real addresses, diagnoses, or identifiers.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timedelta, timezone
 
 from doorstep.models import (
@@ -26,6 +27,15 @@ from doorstep.models import (
 CASE_IDS = {
     "resident_001": "case_maria_001",
     "resident_002": "case_david_002",
+    # "full" demo dataset only (see FULL DATASET below)
+    "resident_ruth": "case_ruth_003",
+    "resident_carlos": "case_carlos_004",
+    "resident_kenji": "case_kenji_005",
+    "resident_grace": "case_grace_006",
+    "resident_harold": "case_harold_007",
+    "resident_beatriz": "case_beatriz_008",
+    "resident_omar": "case_omar_009",
+    "resident_dolores": "case_dolores_010",
 }
 
 DEMO_ZONE = "zone_3"
@@ -55,7 +65,7 @@ LEGACY_SECTORS = {"resident_001": "zone_3_sector_b", "resident_002": "zone_3_sec
 REGISTERED_AT = "2026-10-01T17:00:00Z"
 
 
-def residents() -> list[ResidentProfile]:
+def _core_residents() -> list[ResidentProfile]:
     """Contract v2.0 §10. Fictional people at fictional LA-area coordinates."""
     consents = {"CHECKIN": True, "TRANSPORT": True, "DESTINATION": True, "RECOVERY": False}
     return [
@@ -89,7 +99,7 @@ def _vol(vid, name, phone, lat, lon, vehicle, seats, wc, pets, caps, approved=Tr
                      approved=approved)
 
 
-def organizations() -> list[Organization]:
+def _core_organizations() -> list[Organization]:
     """Canonical org records (contract v2.1 §10). Volunteers live in regions()."""
     return [
         Organization(org_id="eastside_rides_demo", name="Eastside Accessible Rides (fictional)",
@@ -112,9 +122,9 @@ def organizations() -> list[Organization]:
     ]
 
 
-def regions() -> list[Region]:
+def _core_regions() -> list[Region]:
     """Location-first partner data (plan rev 3): area -> orgs -> only their local volunteers/sites."""
-    orgs = {o.org_id: o for o in organizations()}
+    orgs = {o.org_id: o for o in _core_organizations()}
 
     def entry(org_id: str, volunteers=(), sites=()) -> RegionOrg:
         return RegionOrg.from_org(orgs[org_id]).model_copy(
@@ -159,6 +169,186 @@ def regions() -> list[Region]:
                                                  37.7600, -122.4200, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4])]),
                ]),
     ]
+
+
+# ===================================================================== FULL DATASET
+# Two demo datasets (decision B-45):
+#   core  Maria, David, Sarah, Joe, ... Small and stable: every unit test, A's integration tests and the
+#         scenario runner assert against it. Never add people here.
+#   full  core + more residents, volunteers, orgs, shelters and a flood use case, for the live demo.
+#         Chosen by POST /demo/reset {"dataset": "full"} or DEMO_DATASET=full (Render).
+# Core stories stay the same in full: Sarah + Civic Center for Maria, David escalated.
+# The cast and the expected outcome for each person are in docs/demo-cast.md.
+DATASETS = ("core", "full")
+FULL_OUTREACH_MAX_ORGS = 6  # full has 5 wildfire transport orgs; core keeps 3
+
+
+def dataset_name(name: str | None = None) -> str:
+    ds = (name or os.environ.get("DEMO_DATASET") or "core").strip().lower()
+    if ds not in DATASETS:
+        raise ValueError(f"Unknown demo dataset {ds!r}; options: {list(DATASETS)}")
+    return ds
+
+
+def _resident(rid, name, lang, label, lat, lon, needs, pets=0, wants=True, recovery=False, contact=None):
+    consents = {"CHECKIN": True, "TRANSPORT": True, "DESTINATION": True, "RECOVERY": recovery}
+    short = rid.removeprefix("resident_")
+    contacts = [EmergencyContact(contact_id=f"contact_{short}", name=contact[0], phone=f"sim_phone_{short}_contact",
+                                 relationship=contact[1])] if contact else []
+    return ResidentProfile(resident_id=rid, name=name, phone=f"sim_phone_{short}", language=lang,
+                           address=Address(label=f"SYNTHETIC: {label}", lat=lat, lon=lon), emergency_contacts=contacts,
+                           needs=needs, pet_count=pets, wants_help_contact=wants, consents=consents,
+                           registered_at=REGISTERED_AT)
+
+
+def _full_extra_residents() -> list[ResidentProfile]:
+    return [
+        # Wildfire WARNING zone (zone_3 sector B)
+        _resident("resident_ruth", "Ruth (synthetic)", "en", "Zone 3 Sector B meeting point 2", 34.0995, -118.0935,
+                  [3, 9, 10], recovery=True, contact=("Paul (synthetic caregiver)", "caregiver")),
+        _resident("resident_carlos", "Carlos (synthetic)", "es", "Zone 3 Sector B meeting point 6", 34.1025, -118.0920,
+                  [8], pets=2, contact=("Lucia (synthetic)", "wife")),
+        _resident("resident_kenji", "Kenji (synthetic)", "en", "Zone 3 Sector B meeting point 3", 34.0985, -118.0975,
+                  [5, 8]),
+        _resident("resident_grace", "Grace (synthetic)", "en", "Zone 3 Sector B meeting point 5", 34.1000, -118.0950,
+                  [1], wants=False),  # opted out: never contacted
+        # Wildfire ORDER zone (zone_3 sector A): escalation, like David
+        _resident("resident_harold", "Harold (synthetic)", "en", "Zone 3 Sector A meeting point 2", 34.1080, -118.0940,
+                  [3], contact=("June (synthetic)", "daughter")),
+        # Outside every zone: not contacted
+        _resident("resident_beatriz", "Beatriz (synthetic)", "es", "East Valley meeting point 9", 34.0870, -118.1150,
+                  [1, 2]),
+        # Flood WARNING zone (SOUTH_VALLEY_FLOOD preset)
+        _resident("resident_omar", "Omar (synthetic)", "en", "South Valley meeting point 1", 34.0580, -118.1300,
+                  [1, 2], recovery=True),
+        _resident("resident_dolores", "Dolores (synthetic)", "es", "South Valley meeting point 4", 34.0560, -118.1260,
+                  [], pets=3),
+    ]
+
+
+def _full_extra_organizations() -> list[Organization]:
+    return [
+        Organization(org_id="valley_paratransit_demo", name="Valley Paratransit Co-op (fictional)",
+                     calamity_types=["WILDFIRE", "FLOOD"], services=["TRANSPORT"], approved=True, service_radius_km=25),
+        Organization(org_id="hillside_drivers_demo", name="Hillside Community Drivers (fictional)",
+                     calamity_types=["WILDFIRE"], services=["TRANSPORT"], approved=True, service_radius_km=15),
+        Organization(org_id="insurance_help_desk_demo", name="Insurance Help Desk (fictional)",
+                     calamity_types=["ANY"], services=["INSURANCE_GUIDANCE"], approved=True, service_radius_km=40,
+                     recovery_services=["INSURANCE_GUIDANCE"]),
+        Organization(org_id="community_supplies_demo", name="Community Supplies Bank (fictional)",
+                     calamity_types=["ANY"], services=["SUPPLIES", "MEDICAL_EQUIPMENT_REPLACEMENT"], approved=True,
+                     service_radius_km=40, recovery_services=["SUPPLIES", "MEDICAL_EQUIPMENT_REPLACEMENT"]),
+    ]
+
+
+def _full_extra_partners() -> dict[str, dict[str, dict]]:
+    """region_id -> org_id -> {"volunteers": [...], "sites": [...]}, merged into the core regions."""
+    return {
+        "la_county:east_valley": {
+            # Oxygen-ready van for Ruth (no pet space, so never Maria's match).
+            "eastside_rides_demo": {"volunteers": [_vol("volunteer_nadia", "Nadia (synthetic)", "sim_phone_nadia",
+                                                        34.0920, -118.1150, "WHEELCHAIR_VAN", 3, 1, 0, [1, 2, 3, 9, 10])]},
+            # SUV with room for 2 pets: Carlos's match (Joe is closer but has room for 1 pet and no walker space).
+            "neighbor_sedans_demo": {"volunteers": [_vol("volunteer_marcus", "Marcus (synthetic)", "sim_phone_marcus",
+                                                         34.0930, -118.0850, "SUV", 4, 0, 2, [4, 7, 8])]},
+            # Minivan that takes service animals: Kenji's match.
+            "red_cross_demo": {"volunteers": [_vol("volunteer_fatima", "Fatima (synthetic)", "sim_phone_fatima",
+                                                   34.0850, -118.1050, "MINIVAN", 5, 0, 1, [2, 4, 5, 7, 8])]},
+            "valley_paratransit_demo": {"volunteers": [_vol("volunteer_mei", "Mei (synthetic)", "sim_phone_mei",
+                                                            34.0960, -118.0880, "SEDAN", 3, 0, 0, [7, 8])]},
+            # Beth waits for her coordinator's approval (GET /volunteers/pending?org_id=hillside_drivers_demo).
+            "hillside_drivers_demo": {"volunteers": [
+                _vol("volunteer_raj", "Raj (synthetic)", "sim_phone_raj", 34.0900, -118.0750, "SEDAN", 3, 0, 0, [7]),
+                _vol("volunteer_beth", "Beth (synthetic)", "sim_phone_beth", 34.0910, -118.0780, "MINIVAN", 5, 0, 1,
+                     [4, 8], approved=False)]},
+            # Pet-friendly gym without oxygen support: Ruth's shelter must be the Civic Center.
+            "civic_shelter_demo": {"sites": [ShelterSite(site_id="dest_gym_b", name="Eastside High Gym (fictional)",
+                                                         location=point(34.0720, -118.0880), beds_available=40,
+                                                         features=[4, 5, 6])]},
+            "insurance_help_desk_demo": {},
+            "community_supplies_demo": {},
+        },
+        "la_county:south_valley": {
+            # Two wheelchair spaces and oxygen: closest match for Omar in the flood.
+            "valley_paratransit_demo": {"volunteers": [_vol("volunteer_hector", "Hector (synthetic)", "sim_phone_hector",
+                                                            34.0650, -118.1250, "HIGH_ROOF_VAN", 4, 2, 1,
+                                                            [1, 2, 3, 8, 9, 10])]},
+            # High-clearance truck with room for 3 pets: Dolores's match in the flood.
+            "flood_only_demo": {"volunteers": [_vol("volunteer_diego", "Diego (synthetic)", "sim_phone_diego",
+                                                    34.0620, -118.1350, "HIGH_CLEARANCE_TRUCK", 2, 0, 3, [4, 7, 8])]},
+            "red_cross_demo": {"sites": [ShelterSite(site_id="dest_library_c", name="South Valley Library Hall (fictional)",
+                                                     location=point(34.0680, -118.1100), beds_available=15,
+                                                     features=[4, 6])]},
+        },
+    }
+
+
+FULL_LINK_CODES = {
+    "RUTH-2417": {"role": "RESIDENT", "resident_id": "resident_ruth", "case_id": "case_ruth_003",
+                  "display_name": "Ruth (synthetic)"},
+    "CARLOS-3851": {"role": "RESIDENT", "resident_id": "resident_carlos", "case_id": "case_carlos_004",
+                    "display_name": "Carlos (synthetic)"},
+    "KENJI-4962": {"role": "RESIDENT", "resident_id": "resident_kenji", "case_id": "case_kenji_005",
+                   "display_name": "Kenji (synthetic)"},
+    "HAROLD-5073": {"role": "RESIDENT", "resident_id": "resident_harold", "case_id": "case_harold_007",
+                    "display_name": "Harold (synthetic)"},
+    "OMAR-4093": {"role": "RESIDENT", "resident_id": "resident_omar", "case_id": "case_omar_009",
+                  "display_name": "Omar (synthetic)"},
+    "DOLORES-6184": {"role": "RESIDENT", "resident_id": "resident_dolores", "case_id": "case_dolores_010",
+                     "display_name": "Dolores (synthetic)"},
+    "NADIA-5162": {"role": "VOLUNTEER", "volunteer_id": "volunteer_nadia", "org_id": "eastside_rides_demo",
+                   "display_name": "Nadia (synthetic)"},
+    "MARCUS-6274": {"role": "VOLUNTEER", "volunteer_id": "volunteer_marcus", "org_id": "neighbor_sedans_demo",
+                    "display_name": "Marcus (synthetic)"},
+    "FATIMA-7395": {"role": "VOLUNTEER", "volunteer_id": "volunteer_fatima", "org_id": "red_cross_demo",
+                    "display_name": "Fatima (synthetic)"},
+    "HECTOR-7385": {"role": "VOLUNTEER", "volunteer_id": "volunteer_hector", "org_id": "valley_paratransit_demo",
+                    "display_name": "Hector (synthetic)"},
+    "MEI-8406": {"role": "VOLUNTEER", "volunteer_id": "volunteer_mei", "org_id": "valley_paratransit_demo",
+                 "display_name": "Mei (synthetic)"},
+    "DIEGO-8517": {"role": "VOLUNTEER", "volunteer_id": "volunteer_diego", "org_id": "flood_only_demo",
+                   "display_name": "Diego (synthetic)"},
+    "RAJ-9628": {"role": "VOLUNTEER", "volunteer_id": "volunteer_raj", "org_id": "hillside_drivers_demo",
+                 "display_name": "Raj (synthetic)"},
+    "BETH-9739": {"role": "VOLUNTEER", "volunteer_id": "volunteer_beth", "org_id": "hillside_drivers_demo",
+                  "display_name": "Beth (synthetic)"},
+}
+
+
+def residents(dataset: str = "core") -> list[ResidentProfile]:
+    core = _core_residents()
+    return core + _full_extra_residents() if dataset_name(dataset) == "full" else core
+
+
+def organizations(dataset: str = "core") -> list[Organization]:
+    core = _core_organizations()
+    return core + _full_extra_organizations() if dataset_name(dataset) == "full" else core
+
+
+def regions(dataset: str = "core") -> list[Region]:
+    core = _core_regions()
+    if dataset_name(dataset) != "full":
+        return core
+    orgs = {o.org_id: o for o in organizations("full")}
+    out = []
+    for region in core:
+        extra = _full_extra_partners().get(region.region_id, {})
+        entries = []
+        for e in region.orgs:
+            add = extra.get(e.org_id, {})
+            entries.append(e.model_copy(update={"volunteers": e.volunteers + add.get("volunteers", []),
+                                                "shelter_sites": e.shelter_sites + add.get("sites", [])}))
+        have = {e.org_id for e in region.orgs}
+        for org_id, add in extra.items():
+            if org_id not in have:
+                entries.append(RegionOrg.from_org(orgs[org_id]).model_copy(
+                    update={"volunteers": add.get("volunteers", []), "shelter_sites": add.get("sites", [])}))
+        out.append(region.model_copy(update={"orgs": entries}))
+    return out
+
+
+def link_codes(dataset: str = "core") -> dict[str, dict]:
+    return {**LINK_CODES, **FULL_LINK_CODES} if dataset_name(dataset) == "full" else dict(LINK_CODES)
 
 
 def provider_registry() -> list[ProviderRegistration]:

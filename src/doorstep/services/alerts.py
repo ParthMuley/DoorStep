@@ -106,9 +106,12 @@ class AlertService:
     def stale_after_seconds() -> int:
         return int(os.environ.get("ALERT_STALE_AFTER_SECONDS", "900"))
 
-    @staticmethod
-    def outreach_max_orgs() -> int:
-        return int(os.environ.get("OUTREACH_MAX_ORGS", "3"))
+    def outreach_max_orgs(self) -> int:
+        """OUTREACH_MAX_ORGS if set; else 3, or 6 when the "full" demo dataset is loaded (it has 5 wildfire orgs)."""
+        if os.environ.get("OUTREACH_MAX_ORGS"):
+            return int(os.environ["OUTREACH_MAX_ORGS"])
+        full = self.engine.db.get_setting("demo_dataset", "core") == "full"
+        return seed.FULL_OUTREACH_MAX_ORGS if full else 3
 
     # --------------------------------------------------------------- storage
     def _alerts(self, query: Optional[dict] = None) -> list[ZoneAlert]:
