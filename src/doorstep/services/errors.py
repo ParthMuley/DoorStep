@@ -52,6 +52,11 @@ class InsufficientEvidence(DomainError):
     code = "INSUFFICIENT_EVIDENCE"
 
 
+class FeedInvalid(DomainError):
+    status_code = 422
+    code = "FEED_INVALID"
+
+
 def safety_code(reasons: list[str]) -> str:
     if any(r in ("ACTIVE_ORDER_ZONE", "ZONE_UNVERIFIED", "INSIDE_ACTIVE_ORDER_ZONE",
                  "DESTINATION_IN_ACTIVE_ORDER_ZONE") for r in reasons):

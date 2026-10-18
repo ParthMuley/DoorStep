@@ -75,7 +75,8 @@ def test_register_resident(client):
     body = r.json()
     assert body["schema_version"] == "2.0"
     assert body["resident_id"] not in ("resident_001", "resident_002")
-    assert body["zone_status"] == "OUTSIDE_KNOWN_ZONES" and body["needs"] == [1, 6]
+    # No feed ingested yet: no data means UNKNOWN, never "outside"/safe (see test_alerts for after-ingest).
+    assert body["zone_status"] == "UNKNOWN" and body["needs"] == [1, 6]
     stored = client.app.state.service.store.get_resident_profile(body["resident_id"])
     assert stored.emergency_contacts[0].contact_id == f"{body['resident_id']}_contact_1"
 

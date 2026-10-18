@@ -59,6 +59,7 @@ from .errors import (
 )
 from .event_log import EventLog
 from .registry import RegistryService
+from .alerts import AlertService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -86,6 +87,8 @@ class DoorstepService:
         self.sim = MessageSimulator(db, self.store)
         self.registry = RegistryService(db, self.store, self.events)
         self.graph = graph or build_demo_graph()
+        self.alerts = AlertService(self)
+        self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
     def reset(self) -> dict[str, Any]:
@@ -944,6 +947,9 @@ class DoorstepService:
                         None)
         case = self.store.case_for_resident(resident.resident_id) if resident else None
         if case is None:
+            found = self.alerts.volunteer_by_phone(sender)
+            if found:  # a volunteer answering outreach (YES/NO)
+                return self.alerts.volunteer_reply(found[0], found[1], text, external_id)
             self.events.append("UNKNOWN_SENDER_REJECTED", case_id=None, data={"sender_known": False})
             raise Unauthorized("Unknown sender; no case updated", reasons=["UNKNOWN_SENDER"])
         return self.submit_resident_response(case.case_id, text, language, sender=sender, external_id=external_id)
@@ -1023,6 +1029,8 @@ class DoorstepService:
             "timeline": [self._timeline_item(e) for e in self.events.for_case(case_id)],
             "correlation_id": corr,
             # --- additions beyond contract v1.0 (safe to ignore) ---
+            **self._zone_view(case.resident_id),
+            "alert_id": case.alert_id,
             "sector_id": case.sector_id,
             "needs": case.needs.model_dump(),
             "destination_assignment": None if destination is None else {
@@ -1042,6 +1050,13 @@ class DoorstepService:
         }
         view["summary_text"] = self._summary_text(view, transport, destination, escalations, referrals)
         return view
+
+    def _zone_view(self, resident_id: str) -> dict[str, Any]:
+        profile = self.store.find_resident_profile(resident_id)
+        if profile is None:
+            return {"zone_status": "UNKNOWN", "zone_sources": []}
+        zone = self.alerts.zone_for(profile)
+        return {"zone_status": zone["zone_status"], "zone_sources": zone["zone_sources"]}
 
     @staticmethod
     def _timeline_item(e) -> dict[str, Any]:

@@ -71,6 +71,22 @@ def zones(service: DoorstepService = Depends(svc)):
     return out(service.zones_view())
 
 
+@router.get("/demo/feeds/caloes")
+def synthetic_caloes_feed(service: DoorstepService = Depends(svc)):
+    """Synthetic feed in the exact Cal OES GeoJSON shape (raw, no envelope)."""
+    return service.alerts.feed.render_caloes()
+
+
+@router.get("/alerts/active")
+def alerts_active(service: DoorstepService = Depends(svc)):
+    return out(service.alerts.active_view(), version=V2)
+
+
+@router.get("/alerts/{alert_id}/outreach")
+def alert_outreach(alert_id: str, service: DoorstepService = Depends(svc)):
+    return out(service.alerts.outreach_summary(alert_id), version=V2)
+
+
 @router.get("/sim/messages")
 def sim_messages(case_id: Optional[str] = None, service: DoorstepService = Depends(svc)):
     return out({"messages": [m.model_dump() for m in service.sim.outbox(case_id)], "simulated": True})
@@ -194,6 +210,47 @@ def escalate_case(case_id: str, body: s.EscalateBody, corr: Optional[str] = Depe
     view, created = service.escalate_case(case_id, body.reason, idempotency_key=body.idempotency_key,
                                           correlation_id=pick(corr, body))
     return out(view, 201 if created else 200)
+
+
+@write.post("/alerts/ingest")
+def alerts_ingest(body: s.AlertIngestBody, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    return out(service.alerts.ingest(
+        source_id=body.source.source_id, source_type=body.source.source_type, url=body.source.url,
+        fetched_at=body.source.fetched_at, fetch_ok=body.fetch_ok, http_status=body.http_status, error=body.error,
+        payload=body.payload, idempotency_key=body.idempotency_key, correlation_id=pick(corr, body) or ""), version=V2)
+
+
+@write.post("/demo/alerts/trigger")
+def demo_alerts_trigger(body: s.AlertTriggerBody, corr: Optional[str] = Depends(correlation_header),
+                        service: DoorstepService = Depends(svc)):
+    st = service.alerts.feed.trigger(body.action, preset=body.preset, zone_id=body.zone_id, status=body.status,
+                                     event_type=body.event_type, geometry=body.geometry,
+                                     expires_in_minutes=body.expires_in_minutes,
+                                     freeze_age_minutes=body.freeze_age_minutes)
+    poll = None
+    if body.poll_now:
+        from doorstep.models import utc_now_iso
+
+        poll = service.alerts.ingest(source_id="SYNTHETIC_CALOES", source_type="OFFICIAL_SIMULATION",
+                                     url="/demo/feeds/caloes", fetched_at=utc_now_iso(), fetch_ok=True,
+                                     http_status=200, error=None, payload=service.alerts.feed.render_caloes(),
+                                     idempotency_key=f"SYNTHETIC_CALOES:poll_now:v{st.version}",
+                                     correlation_id=pick(corr, body) or "")
+    return out({"action": body.action, "feed_version": st.version, "synthetic_feed_url": "/demo/feeds/caloes",
+                "frozen": st.frozen_at_ms is not None, "poll_result": poll}, version=V2)
+
+
+@write.post("/orgs/{org_id}/outreach")
+def org_outreach(org_id: str, body: s.OutreachBody, _: str = Depends(require_org_agent),
+                 corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
+    return out(service.alerts.start_outreach(org_id, body.alert_id, body.idempotency_key,
+                                             pick(corr, body) or ""), version=V2)
+
+
+@write.post("/sim/outreach/{alert_id}/deadline")
+def sim_outreach_deadline(alert_id: str, service: DoorstepService = Depends(svc)):
+    return out(service.alerts.outreach_deadline(alert_id), version=V2)
 
 
 # ------------------------------------------------- message simulator (B extras)

@@ -28,6 +28,21 @@ Contract v2.0 §5.2 / §5.4, responses carry `schema_version: "2.0"`:
 
 The v1 flow endpoints are unchanged until the switch-over. They read the new resident documents through a temporary adapter (`services/legacy.py`).
 
+## v2 endpoints available now (B3: alerts, geofencing, outreach)
+
+Demo loop for the Calamity agent:
+1. `POST /demo/alerts/trigger {"action":"ISSUE","preset":"ZONE_3_WILDFIRE"}` puts a WARNING zone over Maria and an ORDER zone over David into the synthetic feed.
+2. The Calamity agent polls `GET /demo/feeds/caloes` every 120 s (exact Cal OES GeoJSON) and posts it to `POST /alerts/ingest`.
+3. The ingest response lists `new_alerts`, `affected_cases`, `checkins_sent` (once per resident per alert) and `outreach_orgs`. Today that's `neighbor_sedans_demo`, `eastside_rides_demo` and `red_cross_demo`; flood-only and unapproved orgs are excluded.
+4. The Doorstep agent sends `OutreachRequest` to each listed org agent. The org agent calls `POST /orgs/{org_id}/outreach {alert_id}` (with `X-Org-Agent`), B texts its approved volunteers, and they answer via `/sim/inbound` (YES/NO).
+5. `GET /orgs/{org_id}/volunteers?alert_id=` and `GET /alerts/{alert_id}/outreach` show who's available.
+
+Also available:
+- `GET /alerts/active`: alerts, freshness, and the awareness radius.
+- `POST /sim/outreach/{alert_id}/deadline`: unanswered volunteers become NO_REPLY.
+- `GET /cases/{id}` now includes `zone_status` and `zone_sources`.
+- Scenario C: `{"action":"FREEZE_FEED","freeze_age_minutes":30}`, then ingest. Zones go STALE and nothing is triggered.
+
 ## Contract v1.0 conformance
 
 - Paths, request bodies, response fields, status codes (201 on create, 200 on a repeated idempotency key) and error codes all follow Section 3.

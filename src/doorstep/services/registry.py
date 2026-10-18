@@ -26,11 +26,8 @@ from .store import Store
 
 
 def zone_status_for(profile: ResidentProfile) -> str:
-    """Zone status at registration. An uncertain geocode never yields an automated
-    zone conclusion. (Polygon geofencing against active alerts arrives in B3.)"""
-    if profile.address.geocode_confidence != "HIGH":
-        return "UNKNOWN"
-    return "OUTSIDE_KNOWN_ZONES"
+    """Fallback before the alert service is wired in: no feed data -> UNKNOWN (never 'safe')."""
+    return "UNKNOWN"
 
 
 class RegistryService:
@@ -38,6 +35,7 @@ class RegistryService:
         self.db = db
         self.store = store
         self.events = events
+        self.zone_lookup = zone_status_for  # replaced by AlertService.zone_status_label (polygon geofence)
 
     # ------------------------------------------------------------- residents
     def _new_resident_id(self) -> str:
@@ -58,7 +56,7 @@ class RegistryService:
             self.store.save_resident_profile(profile)
             self.events.append("RESIDENT_REGISTERED", case_id=None, correlation_id=correlation_id,
                                data={"resident_id": rid, "needs": profile.needs})
-        return {"resident_id": rid, "zone_status": zone_status_for(profile), "consents": profile.consents,
+        return {"resident_id": rid, "zone_status": self.zone_lookup(profile), "consents": profile.consents,
                 "needs": profile.needs, "created_at": profile.registered_at}
 
     # --------------------------------------------------------- organizations
@@ -128,16 +126,17 @@ class RegistryService:
             raise NotFound(f"Volunteer {volunteer_id!r} not found in {org_id}")
         if not volunteer.approved:
             raise Conflict("Volunteer is not approved by the partner organization", code="VOLUNTEER_NOT_APPROVED")
+        current = volunteer.availability
+        if current is not None and current.alert_id != alert_id:
+            # Outreach for a different alert is current: an answer for another alert is stale
+            # (checked before idempotency, so a replayed old answer is refused, not echoed).
+            raise Conflict(f"Availability is being collected for {current.alert_id}, not {alert_id}",
+                           code="STALE_AVAILABILITY")
         key = idempotency_key or f"{alert_id}:avail:{volunteer_id}:{'yes' if available else 'no'}"
         existing = self.db.coll("provider_events").find_one({"_id": key})
         if existing:
             return {"volunteer_id": volunteer_id, "alert_id": existing["alert_id"],
                     "availability": existing["state"], "duplicate": True}
-        current = volunteer.availability
-        if current is not None and current.alert_id != alert_id:
-            # Outreach for a different alert is current: an answer for another alert is stale.
-            raise Conflict(f"Availability is being collected for {current.alert_id}, not {alert_id}",
-                           code="STALE_AVAILABILITY")
         state = AvailabilityState.AVAILABLE if available else AvailabilityState.UNAVAILABLE
         record = VolunteerAvailability(alert_id=alert_id, state=state, responded_at=responded_at or utc_now_iso())
         with self.db.tx():

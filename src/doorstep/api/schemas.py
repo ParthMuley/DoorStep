@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from doorstep.models import (
     DestinationOfferIn,
@@ -122,3 +122,37 @@ class DeliveryBody(Body):
 
 class EscalationAckBody(Body):
     acknowledge: bool
+
+
+# ---- contract v2.0 §5.3 / §5.4 (alerts + outreach) ----
+class FeedSource(DoorstepModel):
+    source_id: str
+    source_type: Literal["OFFICIAL_SIMULATION", "REAL_WORLD"]
+    url: Optional[str] = None
+    fetched_at: Optional[str] = None
+
+
+class AlertIngestBody(Body):
+    source: FeedSource
+    fetch_ok: bool = True
+    http_status: Optional[int] = None
+    error: Optional[str] = None
+    payload: Optional[dict[str, Any]] = None
+    idempotency_key: Optional[str] = None
+
+
+class AlertTriggerBody(Body):
+    action: Literal["ISSUE", "UPDATE", "CANCEL", "EXPIRE", "FREEZE_FEED", "UNFREEZE_FEED"]
+    preset: Optional[str] = None
+    zone_id: Optional[str] = None
+    status: Optional[str] = None  # raw Cal OES string, e.g. "Evacuation Order"
+    event_type: Optional[str] = None
+    geometry: Optional[dict[str, Any]] = None
+    expires_in_minutes: Optional[int] = None
+    freeze_age_minutes: int = 0  # FREEZE_FEED: backdate the frozen timestamp (demo staleness)
+    poll_now: bool = False
+
+
+class OutreachBody(Body):
+    alert_id: str
+    idempotency_key: Optional[str] = None

@@ -39,3 +39,36 @@ def test_scenarios_on_real_mongodb(monkeypatch):
     finally:
         real.drop_database(users)
         real.drop_database(orgs)
+
+
+def test_alert_ingest_and_outreach_on_real_mongodb():
+    from pymongo import MongoClient
+
+    from doorstep.services.db import Database
+    from doorstep.services.engine import DoorstepService
+
+    suffix = uuid.uuid4().hex[:8]
+    users, orgs = f"doorstep_users_test_{suffix}", f"doorstep_orgs_test_{suffix}"
+    real = MongoClient(URI, serverSelectionTimeoutMS=5000)
+    try:
+        svc = DoorstepService(Database(client=real, users_db=users, orgs_db=orgs))
+        svc.reset()
+        svc.alerts.feed.trigger("ISSUE", preset="ZONE_3_WILDFIRE")
+        payload = svc.alerts.feed.render_caloes()
+        first = svc.alerts.ingest(source_id="SYNTHETIC_CALOES", source_type="OFFICIAL_SIMULATION", url="t",
+                                  fetched_at=None, fetch_ok=True, http_status=200, error=None, payload=payload,
+                                  idempotency_key="real-1")
+        repeat = svc.alerts.ingest(source_id="SYNTHETIC_CALOES", source_type="OFFICIAL_SIMULATION", url="t",
+                                   fetched_at=None, fetch_ok=True, http_status=200, error=None, payload=payload,
+                                   idempotency_key="real-2")
+        assert len(first["checkins_sent"]) == 2 and repeat["checkins_sent"] == []
+        alert_id = first["new_alerts"][0]["alert_id"]
+        svc.alerts.start_outreach("red_cross_demo", alert_id)
+        svc.inbound_sms("sim_phone_lee", "YES", external_id="lee-real")
+        states = {v["volunteer_id"]: v["availability"]["state"]
+                  for v in svc.registry.org_volunteers("red_cross_demo", alert_id)["volunteers"]}
+        assert states == {"volunteer_maya": "ASKED", "volunteer_lee": "AVAILABLE"}
+        assert svc.alerts.zone_status_label(svc.store.get_resident_profile("resident_002")) == "ORDER"
+    finally:
+        real.drop_database(users)
+        real.drop_database(orgs)

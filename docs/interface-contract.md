@@ -120,7 +120,7 @@ Base URL `DOORSTEP_API_URL` (default `http://127.0.0.1:8000`). Responses below o
 ```
 → `{"resident_id":"resident_003","zone_status":"OUTSIDE_KNOWN_ZONES","consents":{…},"created_at":"…"}`
 - `wants_help_contact:false` means the resident is never contacted (and `CHECKIN` is forced false).
-- `geocode_confidence` `LOW`/`FAILED` → `zone_status: UNKNOWN`.
+- `geocode_confidence` `LOW`/`FAILED` → `zone_status: UNKNOWN`. Before any simulated feed has been ingested, `zone_status` is also `UNKNOWN` (no data never means outside or safe).
 - An emergency contact can reply on the resident's behalf, as a caregiver.
 
 **`POST /organizations`** → 201: registers an org with its volunteers embedded (the team's document shape).
@@ -184,7 +184,7 @@ Response 200:
 ```
 B's rules:
 - **Status:** mapped case-insensitively (`evacuation order`→ORDER, `evacuation warning`→WARNING, `shelter in place`→SHELTER_IN_PLACE, `normal`/`clear to repopulate`→INACTIVE). Unknown strings are rejected and listed, never guessed.
-- **Calamity type:** from `EVENT_TYPE` (`wildfire`/`fire`→WILDFIRE, `flood`→FLOOD…); null → `UNKNOWN`.
+- **Calamity type:** from `EVENT_TYPE` (`wildfire`/`fire`→WILDFIRE, `flood`→FLOOD…); null → `UNKNOWN`. For an `UNKNOWN` type, every approved TRANSPORT org within its radius is eligible for outreach (it can't be filtered by type).
 - **Freshness:** from `STATEWIDE_LAST_UPDATED`/`EDIT_DATE` vs `ALERT_STALE_AFTER_SECONDS`.
 - **Dedupe:** by source record + version + zone.
 - **Cancellation:** only on INACTIVE **or** after missing from 2 consecutive successful ingests (Cal OES rebuild gap).
@@ -209,6 +209,9 @@ Live alerts show `verification: OFFICIAL_LIVE_DISPLAY_ONLY`, `can_trigger_checki
 - `action`: `ISSUE | UPDATE | CANCEL | EXPIRE | FREEZE_FEED | UNFREEZE_FEED`.
 - `preset`: `ZONE_3_WILDFIRE` (WARNING over Maria + ORDER over David + an awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER`. Or explicit `zone_id`, `status` (raw Cal OES string), `event_type`, `geometry`, `expires_in_minutes`.
 - `FREEZE_FEED` stops `STATEWIDE_LAST_UPDATED` advancing, so the feed goes STALE (Scenario C).
+- `CANCEL` = explicit lift: the record stays in the feed with `STATUS: "Normal"`, so it's canceled on the next ingest. `EXPIRE` = the record disappears from the feed, so it's canceled only after 2 consecutive ingests without it.
+- `FREEZE_FEED` accepts optional `freeze_age_minutes` to backdate the frozen timestamp, so the demo goes STALE immediately. `UNFREEZE_FEED` resumes.
+- Response: `{"action","feed_version","synthetic_feed_url","frozen","poll_result"}`. `GET /demo/feeds/caloes` returns the raw FeatureCollection (no envelope).
 
 **`GET /alerts/{alert_id}/outreach`** (card data): `{"alert_id","orgs":[{"org_id","name","distance_km","asked":3,"available":2,"unavailable":0,"no_reply":1}]}`.
 
