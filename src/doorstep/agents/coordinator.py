@@ -120,8 +120,8 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         ctx.logger.exception(f"[{correlation_id}] coordinator error: {type(err).__name__}")
         reply = (f"Something went wrong on my side ({type(err).__name__}, ref {correlation_id}). "
                  "Nothing was changed; no assistance is confirmed.")
-    for part in reply if isinstance(reply, list) else [reply]:
-        await ctx.send(sender, part.to_message() if isinstance(part, Card) else make_chat_reply(part))
+    # Replies share the person's outbox with pushes, so one burst = one ASI:One message.
+    await journey.send_to(ctx, sender, *(reply if isinstance(reply, list) else [reply]))
 
 
 @journey_proto.on_message(AlertNotification)

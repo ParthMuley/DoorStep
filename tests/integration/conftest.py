@@ -39,6 +39,8 @@ def offline_agents(monkeypatch):
     monkeypatch.setenv("USE_LLM_EXTRACTION", "false")
     # Rev 4 linking is tested explicitly (test_rev4_linking.py); other tests use open demo mode.
     monkeypatch.setenv("REQUIRE_LINK", "false")
+    # One-message-per-part (legacy) unless a test turns coalescing on (test_outbox.py).
+    monkeypatch.setenv("PUSH_COALESCE_SECONDS", "0")
 
 
 def make_agent(name: str) -> Agent:

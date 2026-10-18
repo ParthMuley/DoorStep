@@ -63,6 +63,7 @@ from doorstep.integrations.fetch_messages import (
     utc_now,
 )
 from doorstep.agents.links import Link, LinkRegistry
+from doorstep.integrations.outbox import Outbox
 from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
 
 AGENT_TIMEOUT_SECONDS = 25
@@ -96,6 +97,7 @@ class Journey:
         self.outreach: OutreachResult | None = None
         self.cases: dict[str, CaseJourney] = {}
         self.people = LinkRegistry()  # rev 4: linked ASI:One accounts
+        self.outbox = Outbox()  # one ASI:One message per burst per person
         self.pickup_confirms: dict[str, set[str]] = {}
         self.current_alert: dict[str, str] = {}
 
@@ -196,10 +198,8 @@ class Journey:
         for user in list(self.subscribers):
             await self.send_to(ctx, user, card)
 
-    @staticmethod
-    async def send_to(ctx: Context, address: str, *parts: Card | str) -> None:
-        for part in parts:
-            await ctx.send(address, part.to_message() if isinstance(part, Card) else text_message(part))
+    async def send_to(self, ctx: Context, address: str, *parts: Card | str) -> None:
+        await self.outbox.add(ctx, address, *parts)
 
     # ---------------------------------------------- rev 4: people's own answers
     async def resident_checkin(self, ctx: Context, link: Link, answer: str, corr: str) -> Reply:

@@ -90,7 +90,8 @@ class CalamityChecker:
         changed = result.get("new_alerts") or result.get("changed_alerts") or result.get("canceled_alerts")
         ctx.logger.info(f"[{corr}] ingest {result.get('ingest_id')}: freshness {result.get('feed_freshness')}, "
                         f"new {len(result.get('new_alerts', []))}")
-        if result.get("notify_coordinator") and changed:
+        # A replayed ingest (same feed content -> same idempotency key) is not news: never re-notify.
+        if result.get("notify_coordinator") and changed and not result.get("duplicate"):
             await ctx.send(self.coordinator_address(), AlertNotification(
                 correlation_id=corr, created_at=utc_now(), ingest_id=result["ingest_id"],
                 feed_freshness=result.get("feed_freshness", "UNKNOWN"),

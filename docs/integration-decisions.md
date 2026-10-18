@@ -125,4 +125,4 @@ Sources: [avoid areas](https://docs.here.com/routing/docs/routing-v8-avoid-area)
 - Every user message arrives prefixed with `@agent1q…` (the agent mention). Text commands must ignore leading mentions; `LINK <code>` was fixed for this.
 - Pressing Enter in the composer can insert a newline; the send arrow sends.
 - The form card (link code) and review/detail cards render, and their submits/clicks arrive as JSON selections (form values merged).
-- **Several agent messages sent for one user turn are merged into one bubble** (newest first), and only the last card renders as a card. Follow-up: send one combined card per turn (or space out pushes).
+- **Several agent messages sent for one user turn are merged into one bubble** (newest first), and only the last card renders as a card; live, only the newest message shows. **Fixed** with `integrations/outbox.py`: every reply and push to a person is queued and sent as ONE message after 6 s of quiet (mailbox hops take several seconds; 2.5 s split the burst), carrying the last interactive card. Verified live: start check → `outbox: 1 message (4 parts)`.
