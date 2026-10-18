@@ -29,11 +29,19 @@ from doorstep.agents import coordinator_actions as actions
 from doorstep.agents.base import address_for, register_with_backend
 from doorstep.agents.journey import Journey
 from doorstep.integrations.agentverse_setup import enable_auto_mailbox
-from doorstep.integrations.asi_cards import DEMO_PREFIX, Card, parse_card_selection, text_message
+from doorstep.agents.links import Link, link_code_from_text, link_from_backend
+from doorstep.integrations.asi_cards import (
+    DEMO_PREFIX,
+    Card,
+    link_card,
+    parse_card_selection,
+    recovery_consent_card,
+    text_message,
+)
 from doorstep.integrations.asi_one_client import Intent, IntentClient, intent_enabled, keyword_intent
 from doorstep.integrations.fetch_adapter import new_correlation_id
 from doorstep.integrations.fetch_messages import AlertNotification, ClosureNotification
-from doorstep.workflows.backend_v2 import DoorstepBackendV2
+from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
 
 load_dotenv()
 
@@ -99,7 +107,6 @@ async def handle_chat(ctx: Context, sender: str, msg: ChatMessage):
         sender,
         ChatAcknowledgement(timestamp=datetime.now(timezone.utc), acknowledged_msg_id=msg.msg_id),
     )
-    journey.subscribers.add(sender)  # alerts and journey updates are pushed to people talking to us
     text = extract_text(msg)
     correlation_id = new_correlation_id()
     # Never log resident free text; length is enough to debug delivery.
@@ -180,10 +187,111 @@ def case_of(intent: Intent) -> str:
     return actions.CASES_BY_NAME.get(intent.args.get("resident", ""), actions.DEFAULT_CASE)
 
 
+def require_link() -> bool:
+    """Rev 4: only linked accounts act. REQUIRE_LINK=false keeps the open demo mode
+    (anyone acts as coordinator) for automated tests and quick local checks."""
+    return os.getenv("REQUIRE_LINK", "true").lower() == "true"
+
+
+RESIDENT_HELP = ("You're linked as a resident (synthetic). Use the buttons on your check-in cards, or reply "
+                 "1 NEED HELP / 2 HAVE A PLAN / 3 ALREADY LEFT / 4 CALL ME, 'yes'/'no' to confirm needs, "
+                 "'confirm pickup' once you are in the vehicle, or 'status'.")
+VOLUNTEER_HELP = ("You're linked as a volunteer (synthetic). Use the buttons on your cards, or reply 'yes'/'no' "
+                  "to an availability request, 'accept'/'decline' for an assignment, 'confirm pickup', or 'status'.")
+
+
+async def link_account(ctx: Context, sender: str, code: str, corr: str):
+    """The address is the message envelope's sender, never typed text (plan §0.5 item 1)."""
+    try:
+        res = await get_v2_backend().link(code, sender, corr)
+        link = link_from_backend(sender, res)
+    except BackendError as err:
+        return link_card(f"That code didn't work ({err.code}).")
+    except (OSError, ValueError):
+        return "Linking is unavailable right now. Nothing was changed."
+    journey.people.put(ctx, link)
+    if link.role == "COORDINATOR":
+        journey.subscribers.add(sender)
+        return f"Linked as coordinator ({link.display_name}). {HELP_TEXT}"
+    return f"Linked as {link.display_name}. " + (RESIDENT_HELP if link.role == "RESIDENT" else VOLUNTEER_HELP)
+
+
 async def route(ctx: Context, text: str, correlation_id: str, sender: str = ""):
+    selection = parse_card_selection(text) or {}
+    code = link_code_from_text(text) or (selection.get("code") if selection.get("action") == "link" else None)
+    if code:
+        return await link_account(ctx, sender, str(code).strip().upper(), correlation_id)
+    link = journey.people.get(ctx, sender)
+    if link is None and require_link():
+        return [f"Welcome to Doorstep (simulation). {HELP_TEXT}", link_card()]
+    if link is not None and link.role == "RESIDENT":
+        return await resident_route(ctx, link, text, selection, correlation_id)
+    if link is not None and link.role == "VOLUNTEER":
+        return await volunteer_route(ctx, link, text, selection, correlation_id)
+    journey.subscribers.add(sender)  # coordinators (and open demo mode) get operations pushes
     intent = await choose_intent(text, correlation_id)
     ctx.logger.info(f"[{correlation_id}] intent {intent.name} via {intent.source}")
     return await run_intent(ctx, intent, correlation_id, sender)
+
+
+def _word(text: str) -> str:
+    return text.strip().lower().rstrip(".!")
+
+
+async def resident_route(ctx: Context, link: Link, text: str, sel: dict, corr: str):
+    """A resident acts only on their own case."""
+    if sel.get("case_id") and sel["case_id"] != link.case_id:
+        return "That card belongs to another case. Nothing was changed."
+    action, word = sel.get("action"), _word(text)
+    if action == "checkin" or word in ("1", "2", "3", "4"):
+        answer = sel.get("answer") or {"1": "need_help", "2": "have_plan", "3": "already_left", "4": "call_me"}[word]
+        return await journey.resident_checkin(ctx, link, answer, corr)
+    if action == "confirm_needs" or word in ("yes", "si", "sí", "no"):
+        return await journey.resident_confirm_needs(ctx, link, (sel.get("answer") or word) != "no", corr)
+    if action == "confirm_pickup" or "pickup" in word or "picked up" in word:
+        return await journey.confirm_pickup(ctx, link.case_id, corr, by=link)
+    if action == "recovery_consent":
+        return await journey.recovery(ctx, link.case_id, True, corr)
+    if action == "recovery_decline":
+        return await journey.recovery(ctx, link.case_id, False, corr)
+    if action == "case_status" or "status" in word:
+        if journey.case(link.case_id).steps["PROVIDER_ACCEPTED"]:
+            return journey.journey_card(link.case_id, None, note="Your status.")
+        return await actions.case_status(link.case_id, corr)
+    return RESIDENT_HELP
+
+
+def _volunteer_case(link: Link, accepted: bool) -> str | None:
+    for case_id, j in journey.cases.items():
+        record = j.accepted if accepted else j.proposal
+        if record and record.get("volunteer_id") == link.volunteer_id:
+            return case_id
+    return None
+
+
+async def volunteer_route(ctx: Context, link: Link, text: str, sel: dict, corr: str):
+    """A volunteer answers availability, their own assignment and pickup."""
+    action, word = sel.get("action"), _word(text)
+    if action == "availability" or (not action and word in ("yes", "no")):
+        if not action:
+            sel = {"available": word == "yes"}
+        return await journey.volunteer_availability(ctx, link, sel, corr)
+    if action in ("volunteer_accept", "volunteer_decline") or word in ("accept", "decline"):
+        case_id = sel.get("case_id") or _volunteer_case(link, accepted=False)
+        if not case_id:
+            return "There is no assignment waiting for you. Nothing was changed."
+        return await journey.volunteer_decides(ctx, link, case_id, action == "volunteer_accept" or word == "accept",
+                                               corr)
+    if action == "confirm_pickup" or "pickup" in word:
+        case_id = sel.get("case_id") or _volunteer_case(link, accepted=True)
+        if not case_id:
+            return "You have no accepted assignment. Nothing was changed."
+        return await journey.confirm_pickup(ctx, case_id, corr, by=link)
+    if action == "case_status" or "status" in word:
+        case_id = _volunteer_case(link, accepted=True)
+        return (journey.journey_card(case_id, None, note="Your assignment.") if case_id
+                else "You have no accepted assignment right now.")
+    return VOLUNTEER_HELP
 
 
 async def run_intent(ctx: Context, intent: Intent, corr: str, sender: str):
@@ -204,6 +312,13 @@ async def run_intent(ctx: Context, intent: Intent, corr: str, sender: str):
     if name == "confirm_arrival":
         return await journey.confirm_arrival(ctx, case_id, corr)
     if name == "request_recovery":
+        resident = journey.people.resident_for_case(case_id)
+        if resident:  # consent is the resident's own decision (plan §0.2)
+            await journey.send_to(ctx, resident.address, recovery_consent_card(
+                case_id=case_id, display_name=resident.display_name, help_types=["TEMPORARY_HOUSING",
+                                                                                 "INSURANCE_GUIDANCE"]))
+            return (f"Only {resident.display_name} can consent to sharing their needs. I've asked them in their "
+                    "own chat; nothing is shared until they say yes.")
         return await journey.recovery(ctx, case_id, True, corr)
     if name == "decline_recovery":
         return await journey.recovery(ctx, case_id, False, corr)

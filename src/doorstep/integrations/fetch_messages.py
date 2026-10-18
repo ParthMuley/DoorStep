@@ -44,6 +44,8 @@ class OutreachRequest(_Msg):
     calamity_type: str
     zone_id: Optional[str] = None
     idempotency_key: str
+    # rev 4: volunteers linked to ASI:One answer for themselves; never auto-answered.
+    live_volunteers: list[str] = []
 
 
 class OutreachResult(_Msg):
@@ -85,6 +87,8 @@ class AcceptRequest(_Msg):
     site_id: Optional[str] = None
     shared_with_volunteer: dict[str, Any] = {}
     idempotency_key: str
+    # rev 4: the volunteer's own answer from their ASI:One chat; None = simulated persona.
+    decision: Optional[Literal["ACCEPTED", "DECLINED"]] = None
 
 
 class AcceptResponse(_Msg):
@@ -123,6 +127,21 @@ class ArrivalReport(_Msg):
     site_id: str
     report_id: str
     source: str = "SIMULATED"
+
+
+class VolunteerAnswer(_Msg):
+    """rev 4: a linked volunteer's availability answer, relayed by Doorstep to the network."""
+    alert_id: str
+    volunteer_id: str
+    org_id: str
+    available: bool
+    idempotency_key: str
+
+
+class VolunteerAnswerAck(_Msg):
+    volunteer_id: str
+    availability: Optional[str] = None
+    error: Optional[dict[str, Any]] = None
 
 
 class ReportUnavailable(_Msg):

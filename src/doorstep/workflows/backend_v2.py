@@ -18,6 +18,13 @@ def network_agent_token() -> str:
     return os.getenv("NETWORK_AGENT_TOKEN") or DEFAULT_NETWORK_TOKEN
 
 
+DEFAULT_DOORSTEP_TOKEN = "change-me-doorstep-agent-token"  # rev 4 §0.5; real value only in .env
+
+
+def doorstep_agent_token() -> str:
+    return os.getenv("DOORSTEP_AGENT_TOKEN") or DEFAULT_DOORSTEP_TOKEN
+
+
 class DoorstepBackendV2(DoorstepBackend):
     """`agent_token` is set only for the Volunteer Network agent: network-acting routes
     (outreach, availability, accept, recovery respond) need `X-Agent-Token` (contract v2.1 §1)."""
@@ -159,6 +166,25 @@ class DoorstepBackendV2(DoorstepBackend):
                 "provider_notices": provider_notices, "computed_at": computed_at,
                 "idempotency_key": idempotency_key}
         return await self._request("POST", "/routes/previews", correlation_id, body)
+
+    # ---- rev 4: account linking + deadlines (contract v2.2, plan §0.4-0.5)
+    async def link(self, code: str, asi_one_address: str, correlation_id: str) -> dict[str, Any]:
+        """`POST /link`: only the Doorstep agent calls this, with the sender address taken from
+        the ASI:One message envelope (never from typed text) and its own agent token."""
+        return await self._request("POST", "/link", correlation_id,
+                                   self._v2(correlation_id, code=code, asi_one_address=asi_one_address),
+                                   extra_headers={"X-Agent-Token": doorstep_agent_token()})
+
+    async def resident_reply(self, case_id: str, text: str, sender: str, correlation_id: str,
+                             language: str | None = None, external_id: str | None = None) -> dict[str, Any]:
+        """Resident answer arriving through the Doorstep agent (carries the Doorstep token)."""
+        return await self._request("POST", f"/cases/{case_id}/responses", correlation_id, self._body(
+            correlation_id, text=text, sender=sender, language=language, external_id=external_id),
+            extra_headers={"X-Agent-Token": doorstep_agent_token()})
+
+    async def deadline_sweep(self, correlation_id: str) -> dict[str, Any]:
+        return await self._request("POST", "/deadlines/sweep", correlation_id, self._v2(correlation_id),
+                                   extra_headers={"X-Agent-Token": doorstep_agent_token()})
 
     # ---- card data
     async def dashboard_summary(self, correlation_id: str) -> dict[str, Any]:

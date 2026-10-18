@@ -37,6 +37,8 @@ def offline_agents(monkeypatch):
     # .env may enable the real ASI:One API; tests inject fake models explicitly instead.
     monkeypatch.setenv("USE_LLM_INTENT", "false")
     monkeypatch.setenv("USE_LLM_EXTRACTION", "false")
+    # Rev 4 linking is tested explicitly (test_rev4_linking.py); other tests use open demo mode.
+    monkeypatch.setenv("REQUIRE_LINK", "false")
 
 
 def make_agent(name: str) -> Agent:

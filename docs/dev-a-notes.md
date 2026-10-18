@@ -127,3 +127,18 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   2. **`ROUTE_MAX_AVOID_AREAS` (250) vs HERE:** HERE v8 accepts **at most 20 polygons** per request (250 is the bounding-box figure). The Route agent refuses above 20 (`TOO_MANY_AVOID_AREAS`). Please align B's default to 20 so the two refusals agree.
   3. **Unit tests and `NETWORK_AGENT_TOKEN`:** please also clear it in `tests/unit/conftest.py` (see the earlier note).
 - **Rev 4 amendments §0.5:** A agrees with all three (Doorstep-only sender with `DOORSTEP_AGENT_TOKEN`, public demo link codes, 15-minute reply deadline plus `/deadlines/sweep` from the Calamity Checker). They will be implemented in A's rev 4 linking work.
+
+### Rev 4: ASI:One account linking + role cards (2026-10-18)
+- **Linking:** `LINK <code>` (or the link form card) → `POST /link` with the **envelope sender**, never typed text, plus `X-Agent-Token: DOORSTEP_AGENT_TOKEN`. Links live in `agents/links.py` and persist in the Doorstep agent's storage. With `REQUIRE_LINK=true` (default), an unlinked chat only gets the link card. Tests use open mode, except `test_rev4_linking.py`.
+- **Resident cards:** check-in (1–4) → needs confirmation (yes/no) → help on the way + "confirm pickup" → arrival + **consent card (only the resident can consent; a coordinator's request is forwarded to them)** → referrals.
+- **Volunteer cards:**
+  - availability (yes/no), relayed to the Volunteer Network as `VolunteerAnswer`; linked volunteers are never auto-answered (`live_volunteers`);
+  - assignment card (accept/decline; pickup point withheld);
+  - route card + "confirm pickup".
+- **Pickup** needs the volunteer **and** the resident. A linked person confirms in their own chat (`source: ASI_ONE`, both party IDs). An unlinked person is simulated and labeled.
+- **Test:** `tests/integration/test_rev4_linking.py`: three linked people plus a stranger. It covers the link card, a spent code (409), the resident, volunteer and coordinator cards, a two-party pickup, and that a coordinator can't consent. **241 tests pass.**
+- **Live:** 8/8 agents on Agentverse mailboxes (the old sample "ASI uAgent" was unregistered at the user's request); journey complete with the coordinator linked.
+- **Asks for B (contract v2.2, still missing; A uses a stand-in `POST /link` in `tests/integration/fake_v2_backend.py`, with codes MARIA-4821, DAVID-5932, SARAH-7310, LEE-6624, COORD-1150):**
+  1. `POST /link {code, asi_one_address}` with `X-Agent-Token: DOORSTEP_AGENT_TOKEN`. It should return `role`, `display_name` and `resident_id`+`case_id` / `volunteer_id`+`org_id` / `coordinator_id`. 409 for an unknown or spent code.
+  2. `POST /cases/{id}/responses`: accept `sender` = the linked ASI:One address when the Doorstep token is present. Until then, the stand-in returns `sender_for_backend` (the seeded sim contact), and Doorstep sends that.
+  3. `POST /deadlines/sweep`: the client method exists (`deadline_sweep`), but the Calamity Checker doesn't call it yet, and B hasn't built the route.

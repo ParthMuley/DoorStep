@@ -34,6 +34,8 @@ from doorstep.integrations.fetch_messages import (
     ReferralResponse,
     ReportRequest,
     ReportUnavailable,
+    VolunteerAnswer,
+    VolunteerAnswerAck,
     utc_now,
 )
 from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2, network_agent_token
@@ -73,6 +75,9 @@ def build_network_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> Prot
                 asked = [a["volunteer_id"] for a in org.get("asked", [])]
                 answers = {"available": [], "unavailable": [], "awaiting_reply": []}
                 for vid in asked:  # simulated volunteer replies, recorded through B (SIMULATED)
+                    if vid in msg.live_volunteers:  # rev 4: they answer in their own ASI:One chat
+                        answers["awaiting_reply"].append(vid)
+                        continue
                     answer = persona(vid)["availability"]
                     if answer in ("YES", "NO"):
                         await backend.record_availability(alert_id, vid, org["org_id"], answer == "YES", utc_now(),
@@ -95,7 +100,9 @@ def build_network_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> Prot
         if msg.idempotency_key in decisions:  # duplicate/delayed request: same answer
             await ctx.send(sender, decisions[msg.idempotency_key])
             return
-        if msg.role == "VOLUNTEER":
+        if msg.role == "VOLUNTEER" and msg.decision:  # rev 4: the volunteer's own click
+            decision = msg.decision
+        elif msg.role == "VOLUNTEER":
             decision = "DECLINED" if declines(msg.volunteer_id or "") else "ACCEPTED"
         else:
             decision = "ACCEPTED" if PERSONAS["shelter_sites"].get(msg.site_id or "") == "ACCEPT" else "DECLINED"
@@ -118,6 +125,18 @@ def build_network_protocol(get_backend: Callable[[], DoorstepBackendV2]) -> Prot
         if decision != "ERROR":
             decisions[msg.idempotency_key] = reply
         ctx.logger.info(f"[{msg.correlation_id}] {msg.org_id} {msg.role} {msg.assignment_id}: {decision}")
+        await ctx.send(sender, reply)
+
+    @proto.on_message(VolunteerAnswer, replies=VolunteerAnswerAck)
+    async def on_volunteer_answer(ctx: Context, sender: str, msg: VolunteerAnswer):
+        try:
+            res = await get_backend().record_availability(msg.alert_id, msg.volunteer_id, msg.org_id, msg.available,
+                                                          utc_now(), msg.idempotency_key, msg.correlation_id)
+            reply = VolunteerAnswerAck(correlation_id=msg.correlation_id, created_at=utc_now(),
+                                       volunteer_id=msg.volunteer_id, availability=res.get("availability"))
+        except (BackendError, OSError) as err:
+            reply = VolunteerAnswerAck(correlation_id=msg.correlation_id, created_at=utc_now(),
+                                       volunteer_id=msg.volunteer_id, error=_error(err))
         await ctx.send(sender, reply)
 
     @proto.on_message(ReportRequest, replies={PickupReport, ArrivalReport, ReportUnavailable})

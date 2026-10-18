@@ -9,6 +9,10 @@ Match card -> approve -> Volunteer Network forwards volunteer + shelter acceptan
 pickup report -> arrival report (green) -> recovery consent -> Post-Calamity agent.
 David: no match (order zone) -> escalate -> Escalation agent (receipt only).
 
+Rev 4: residents and volunteers who linked their ASI:One account get their own cards
+(check-in, needs confirmation, availability, assignment + route, pickup) and answer by
+clicking; anyone not linked falls back to the labeled simulator/personas.
+
 State is in memory for now (one coordinator process); the thin LangGraph step adds
 durable per-case state later.
 """
@@ -21,11 +25,16 @@ from uagents import Context
 
 from doorstep.integrations.asi_cards import (
     Card,
+    assignment_card,
+    availability_card,
     case_card,
+    checkin_card,
     escalation_card,
     help_on_the_way_card,
     info_card,
     match_card,
+    needs_confirm_card,
+    pickup_confirm_card,
     recovery_consent_card,
     text_message,
 )
@@ -49,8 +58,11 @@ from doorstep.integrations.fetch_messages import (
     ReportUnavailable,
     RouteRequest,
     RouteResponse,
+    VolunteerAnswer,
+    VolunteerAnswerAck,
     utc_now,
 )
+from doorstep.agents.links import Link, LinkRegistry
 from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
 
 AGENT_TIMEOUT_SECONDS = 25
@@ -60,6 +72,7 @@ SIM_REPLIES = {  # simulated resident SMS (B's simulator); labeled SIMULATED in 
     "case_david_002": ("sim_phone_david", "en", ["1 I need help, I use a wheelchair.", "YES"]),
 }
 DEFAULT_HELP_TYPES = ["TEMPORARY_HOUSING", "INSURANCE_GUIDANCE"]
+CHECKIN_TEXT = {"need_help": "1", "have_plan": "2", "already_left": "3", "call_me": "4"}
 Reply = str | Card | list[str | Card]
 
 
@@ -82,6 +95,9 @@ class Journey:
         self.last_alert: AlertNotification | None = None
         self.outreach: OutreachResult | None = None
         self.cases: dict[str, CaseJourney] = {}
+        self.people = LinkRegistry()  # rev 4: linked ASI:One accounts
+        self.pickup_confirms: dict[str, set[str]] = {}
+        self.current_alert: dict[str, str] = {}
 
     def case(self, case_id: str) -> CaseJourney:
         return self.cases.setdefault(case_id, CaseJourney())
@@ -117,15 +133,29 @@ class Journey:
         the volunteers of the organizations nearest the zone (B picks them by location)."""
         self.last_alert = msg
         await self.push(ctx, self.alert_card(msg))
+        for c in msg.affected_cases:  # rev 4: linked residents get their own check-in card
+            resident = self.people.resident_for_case(c["case_id"])
+            if resident:
+                await self.send_to(ctx, resident.address, checkin_card(
+                    case_id=c["case_id"], display_name=resident.display_name, zone_status=c.get("zone_status"),
+                    language="es" if c["case_id"] == "case_maria_001" else None))
         if not msg.outreach_orgs:
             return
         alert_id = msg.outreach_orgs[0]["alert_id"]
         calamity = next((a["calamity_type"] for a in msg.new_alerts if a["alert_id"] == alert_id), "UNKNOWN")
+        self.current_alert = {"alert_id": alert_id, "calamity": calamity}
+        live = [l.volunteer_id for l in self.people.by_role("VOLUNTEER") if l.volunteer_id]
         result = await self.ask(ctx, self.address_for("NETWORK"), OutreachRequest(
             correlation_id=msg.correlation_id, created_at=utc_now(), alert_id=alert_id, calamity_type=calamity,
-            idempotency_key=f"{alert_id}:outreach"), OutreachResult)
+            idempotency_key=f"{alert_id}:outreach", live_volunteers=live), OutreachResult)
         self.outreach = result
         await self.push(ctx, self.outreach_card(result))
+        for org in (result.orgs if result else []):  # rev 4: linked volunteers answer themselves
+            for vid in org.get("awaiting_reply", []):
+                volunteer = self.people.volunteer(vid)
+                if volunteer:
+                    await self.send_to(ctx, volunteer.address, availability_card(
+                        alert_id=alert_id, volunteer_id=vid, org_id=org["org_id"], calamity=calamity))
 
     # -------------------------------------------------------- road closures
     async def on_closures(self, ctx: Context, msg: ClosureNotification) -> None:
@@ -162,8 +192,78 @@ class Journey:
                          "News agent · SYNTHETIC official closures + SYNTHETIC news")
 
     async def push(self, ctx: Context, card: Card | str) -> None:
+        """Operations updates for coordinators (and unlinked demo users)."""
         for user in list(self.subscribers):
-            await ctx.send(user, card.to_message() if isinstance(card, Card) else text_message(card))
+            await self.send_to(ctx, user, card)
+
+    @staticmethod
+    async def send_to(ctx: Context, address: str, *parts: Card | str) -> None:
+        for part in parts:
+            await ctx.send(address, part.to_message() if isinstance(part, Card) else text_message(part))
+
+    # ---------------------------------------------- rev 4: people's own answers
+    async def resident_checkin(self, ctx: Context, link: Link, answer: str, corr: str) -> Reply:
+        if answer not in CHECKIN_TEXT:
+            return "Please choose one of the check-in options. Nothing was changed."
+        try:
+            res = await self.get_backend().resident_reply(link.case_id, CHECKIN_TEXT[answer], link.backend_sender,
+                                                          corr, external_id=f"{link.case_id}:checkin:{answer}")
+        except (BackendError, OSError) as err:
+            return self.refused(err)
+        await self.push(ctx, f"{link.display_name} answered the check-in in their own chat: "
+                             f"{res.get('intent')} (resident status {res.get('resident_status')}).")
+        reply: list[str | Card] = [f"Thank you. Recorded: {res.get('intent')}. This is a simulation; "
+                                   "in a real emergency call 911."]
+        if res.get("confirmation_question") and not res.get("needs_confirmed"):
+            reply.append(needs_confirm_card(case_id=link.case_id, question=res["confirmation_question"]))
+        return reply
+
+    async def resident_confirm_needs(self, ctx: Context, link: Link, yes: bool, corr: str) -> Reply:
+        try:
+            res = await self.get_backend().resident_reply(link.case_id, "YES" if yes else "NO", link.backend_sender,
+                                                          corr, external_id=f"{link.case_id}:confirm:{yes}")
+        except (BackendError, OSError) as err:
+            return self.refused(err)
+        if res.get("needs_confirmed"):
+            self.case(link.case_id).steps["REQUESTED"] = utc_now()
+        await self.push(ctx, f"{link.display_name} {'confirmed' if yes else 'did not confirm'} their needs in "
+                             f"their own chat (needs confirmed: {res.get('needs_confirmed')}).")
+        return (f"Thank you. Needs confirmed: {res.get('needs_confirmed')}. A coordinator is looking for a "
+                "volunteer; nothing is arranged until a volunteer accepts." if yes else
+                "Understood. A coordinator will follow up with you. Nothing was arranged.")
+
+    async def volunteer_availability(self, ctx: Context, link: Link, sel: dict[str, Any], corr: str) -> Reply:
+        if sel.get("volunteer_id", link.volunteer_id) != link.volunteer_id:
+            return "That request was for another volunteer. Nothing was changed."
+        alert_id = sel.get("alert_id") or self.current_alert.get("alert_id")
+        if not alert_id:
+            return "There is no active simulated alert to answer. Nothing was changed."
+        ack = await self.ask(ctx, self.address_for("NETWORK"), VolunteerAnswer(
+            correlation_id=corr, created_at=utc_now(), alert_id=alert_id, volunteer_id=link.volunteer_id,
+            org_id=sel.get("org_id") or link.org_id, available=bool(sel.get("available")),
+            idempotency_key=f"{alert_id}:avail:{link.volunteer_id}"), VolunteerAnswerAck)
+        if ack is None or ack.error:
+            return f"Your answer could not be recorded ({(ack.error or {}).get('code') if ack else 'no reply'})."
+        await self.push(ctx, f"{link.display_name} answered in their own chat: {ack.availability}.")
+        return f"Thanks, recorded as {ack.availability}. Being available is not an assignment."
+
+    async def volunteer_decides(self, ctx: Context, link: Link, case_id: str, accept: bool, corr: str) -> Reply:
+        p = self.case(case_id).proposal
+        if not p or p["volunteer_id"] != link.volunteer_id:
+            return "This assignment is no longer waiting for you. Nothing was changed."
+        outcome = await self._decide(ctx, case_id, corr, p, "ACCEPTED" if accept else "DECLINED")
+        if not outcome["accepted"]:
+            for part in outcome["coordinator"]:
+                await self.push(ctx, part)
+            return "Thanks for letting us know; declining is always okay. The coordinator will ask someone else."
+        resident = self.people.resident_for_case(case_id)
+        for part in outcome["coordinator"]:
+            await self.push(ctx, part)
+        if resident:
+            await self.send_to(ctx, resident.address, outcome["help"], pickup_confirm_card(case_id=case_id,
+                                                                                            who="resident"))
+        return [outcome["route"], pickup_confirm_card(case_id=case_id, who="volunteer")]
+
 
     @staticmethod
     def alert_card(msg: AlertNotification) -> Card:
@@ -238,11 +338,31 @@ class Journey:
         p = j.proposal
         if not p:
             return f"There is no proposed arrangement for {NAMES.get(case_id, case_id)} yet. Ask me to find a match first."
+        volunteer = self.people.volunteer(p["volunteer_id"])
+        if volunteer:  # rev 4: the volunteer decides in their own ASI:One chat
+            eta = (p.get("eta_estimate") or {}).get("minutes")
+            await self.send_to(ctx, volunteer.address, assignment_card(
+                case_id=case_id, assignment_id=p["assignment_id"], volunteer_id=p["volunteer_id"],
+                shared=p.get("shared_with_volunteer", {}), shelter=f"{p.get('site_id')} ({p.get('shelter_org_id')})",
+                eta_minutes=eta))
+            return (f"Asked {p['volunteer_id']} in their own ASI:One chat. Nothing is confirmed until they accept; "
+                    "you'll get an update here.")
+        outcome = await self._decide(ctx, case_id, corr, p, None)
+        if not outcome["accepted"]:
+            return outcome["coordinator"][0] if len(outcome["coordinator"]) == 1 else outcome["coordinator"]
+        return [outcome["help"], outcome["route"]]
+
+    async def _decide(self, ctx: Context, case_id: str, corr: str, p: dict[str, Any],
+                      decision: str | None) -> dict[str, Any]:
+        """Forward the volunteer's decision (their click, or the simulated persona when
+        `decision` is None) and the shelter's, then plan the route. Returns the cards per
+        audience: coordinator updates, the resident's help card, the volunteer's route."""
+        j = self.case(case_id)
         aid = p["assignment_id"]
         vol_req = AcceptRequest(correlation_id=corr, created_at=utc_now(), case_id=case_id, assignment_id=aid,
                                 org_id=p["org_id"], role="VOLUNTEER", volunteer_id=p["volunteer_id"],
                                 shared_with_volunteer=p.get("shared_with_volunteer", {}),
-                                idempotency_key=f"{aid}:accept:{p['volunteer_id']}")
+                                idempotency_key=f"{aid}:accept:{p['volunteer_id']}", decision=decision)
         shelter_req = AcceptRequest(correlation_id=corr, created_at=utc_now(), case_id=case_id, assignment_id=aid,
                                     org_id=p["shelter_org_id"], role="SHELTER", site_id=p["site_id"],
                                     idempotency_key=f"{aid}:accept:{p['site_id']}")
@@ -251,20 +371,22 @@ class Journey:
         network = self.address_for("NETWORK")
         vol = await self.ask(ctx, network, vol_req, AcceptResponse)
         shelter = await self.ask(ctx, network, shelter_req, AcceptResponse)
+        how = "in their own chat" if decision else "(simulated)"
         if vol is None or vol.decision == "ERROR":
-            return ("The volunteer did not confirm (via the Volunteer Network). Help is NOT on the way yet; "
-                    "I will not resend "
-                    "blindly. Ask for status in a moment.")
+            return {"accepted": False, "coordinator": [
+                "The volunteer's answer could not be recorded (via the Volunteer Network). Help is NOT on the way "
+                "yet; I will not resend blindly. Ask for status in a moment."]}
         if vol.decision == "DECLINED":
             nxt = vol.backend.get("next_alternate")
             j.proposal, j.attempt = None, j.attempt + 1
             if not nxt:
                 j.map = {"color": "black", "label": "Coordinator attention"}
-                return f"{p['volunteer_id']} declined (simulated). No other eligible volunteer; the case needs the coordinator."
+                return {"accepted": False, "coordinator": [
+                    f"{p['volunteer_id']} declined {how}. No other eligible volunteer; the case needs the coordinator."]}
             card = await self.find_match(ctx, case_id, corr, select=nxt["volunteer_id"])
             if isinstance(card, Card):
-                card.narration = f"{p['volunteer_id']} declined (simulated), no pressure. Next eligible volunteer: " + card.narration
-            return card
+                card.narration = f"{p['volunteer_id']} declined {how}, no pressure. Next eligible volunteer: " + card.narration
+            return {"accepted": False, "coordinator": [card]}
         j.accepted = {"assignment_id": aid, "org_id": p["org_id"], "volunteer_id": p["volunteer_id"]}
         j.shelter_accepted = bool(shelter and shelter.decision == "ACCEPTED")
         j.steps["PROVIDER_ACCEPTED"] = utc_now()
@@ -280,7 +402,8 @@ class Journey:
             volunteer_label=f"{p['volunteer_id']} ({p.get('vehicle_type', '')}, {p['org_id']})",
             eta_minutes=eta_minutes, eta_label=eta.get("label") or "Illustrative estimate, not a guarantee",
             route_status=route.status if route else "no route yet")
-        return [help_card, self.route_card(case_id, p["volunteer_id"], route)]
+        return {"accepted": True, "help": help_card, "route": self.route_card(case_id, p["volunteer_id"], route),
+                "coordinator": [help_card, self.route_card(case_id, p["volunteer_id"], route)]}
 
     @staticmethod
     def route_card(case_id: str, volunteer_id: str, r: RouteResponse | None) -> Card:
@@ -303,28 +426,64 @@ class Journey:
         return info_card(title, rows, "Illustrative route sent to the volunteer (simulated):", "Route agent · HERE")
 
     # -------------------------------------------------------- pickup/arrival
-    async def confirm_pickup(self, ctx: Context, case_id: str, corr: str) -> Reply:
+    async def confirm_pickup(self, ctx: Context, case_id: str, corr: str, by: Link | None = None) -> Reply:
+        """Pickup needs the volunteer AND the resident. A linked person confirms only in their
+        own chat; an unlinked one is simulated (labeled) when the coordinator asks."""
         j = self.case(case_id)
         if not j.accepted:
             return "Pickup can't be confirmed: no volunteer has accepted this case. Nothing was changed."
         a = j.accepted
-        report = await self.ask(ctx, self.address_for("NETWORK"), ReportRequest(
-            correlation_id=corr, created_at=utc_now(), kind="PICKUP", case_id=case_id,
-            assignment_id=a["assignment_id"]), {PickupReport, ReportUnavailable})
-        if not isinstance(report, PickupReport):
-            return "No pickup report came back from the Volunteer Network. Pickup is NOT confirmed."
+        if j.steps["PICKUP_CONFIRMED"]:
+            return self.journey_card(case_id, "PICKUP_CONFIRMED", note="Pickup was already confirmed.")
+        got = self.pickup_confirms.setdefault(case_id, set())
+        volunteer = self.people.volunteer(a["volunteer_id"])
+        resident = self.people.resident_for_case(case_id)
+        if by is not None and by.role == "VOLUNTEER":
+            if by.volunteer_id != a["volunteer_id"]:
+                return "You are not the volunteer on this assignment. Nothing was changed."
+            got.add("volunteer")
+        elif by is not None and by.role == "RESIDENT":
+            got.add("resident")
+        report_id = f"pickup_{a['assignment_id']}"
+        if "volunteer" not in got and volunteer is None and (by is None or by.role == "COORDINATOR"):
+            report = await self.ask(ctx, self.address_for("NETWORK"), ReportRequest(
+                correlation_id=corr, created_at=utc_now(), kind="PICKUP", case_id=case_id,
+                assignment_id=a["assignment_id"]), {PickupReport, ReportUnavailable})
+            if isinstance(report, PickupReport):
+                got.add("volunteer_simulated")
+                report_id = report.report_id
+        if "resident" not in got and resident is None and (by is None or by.role == "COORDINATOR"):
+            got.add("resident_simulated")
+        waiting = [who for who, keys in (("the volunteer", {"volunteer", "volunteer_simulated"}),
+                                         ("the resident", {"resident", "resident_simulated"})) if not got & keys]
+        if waiting:
+            await self.push(ctx, f"Pickup for {NAMES.get(case_id, case_id)}: waiting for {' and '.join(waiting)} "
+                                 "to confirm in their own chat. Pickup is NOT confirmed yet.")
+            return (f"Recorded. Waiting for {' and '.join(waiting)} to confirm too; pickup is not confirmed until "
+                    "both do.")
+        live = {"volunteer", "resident"} <= got
+        confirmations = [{"party": "volunteer", "party_id": a["volunteer_id"]}]
+        if "resident" in got and resident is not None:
+            confirmations.append({"party": "resident", "party_id": resident.person_id})
         evidence = {"type": "VOLUNTEER_AND_RESIDENT_CONFIRMATION", "volunteer_confirmed": True,
-                    "resident_confirmed": True, "caregiver_confirmed": False, "code_verified": report.code_verified,
-                    "source": "SIMULATED", "report_id": report.report_id,
-                    "confirmations": [{"party": "volunteer", "party_id": report.volunteer_id}]}
+                    "resident_confirmed": True, "caregiver_confirmed": False, "code_verified": False,
+                    "source": "ASI_ONE" if live else "SIMULATED", "report_id": report_id,
+                    "confirmations": confirmations}
         try:
             res = await self.get_backend().pickup_v2(a["assignment_id"], evidence, f"{a['assignment_id']}:pickup", corr)
         except (BackendError, OSError) as err:
             return self.refused(err)
         j.steps["PICKUP_CONFIRMED"] = res.get("confirmed_pickup_at")
         j.map, j.next_step = await self.case_map(case_id, corr, res), "Awaiting arrival check-in at the shelter."
-        return self.journey_card(case_id, res.get("resident_status"),
-                                 note="Pickup confirmed by the volunteer's report + simulated resident confirmation.")
+        how = ("Pickup confirmed by both the volunteer and the resident in their own chats." if live else
+               "Pickup confirmed (" + ", ".join(sorted(x.replace("_", " ") for x in got)) + ").")
+        card = self.journey_card(case_id, res.get("resident_status"), note=how)
+        for person in (volunteer, resident):
+            if person is not None and person is not by:
+                await self.send_to(ctx, person.address, card)
+        if by is not None and by.role != "COORDINATOR":
+            await self.push(ctx, card)
+        return card
 
     async def confirm_arrival(self, ctx: Context, case_id: str, corr: str) -> Reply:
         j = self.case(case_id)
@@ -345,9 +504,17 @@ class Journey:
             return self.refused(err)
         j.steps["ARRIVAL_CONFIRMED"] = res.get("confirmed_arrival_at")
         j.map, j.next_step = await self.case_map(case_id, corr, res), "Ask whether the resident wants further help."
-        return [self.journey_card(case_id, res.get("resident_status"), note="Arrival confirmed by shelter check-in."),
-                recovery_consent_card(case_id=case_id, display_name=NAMES.get(case_id, case_id),
-                                      help_types=DEFAULT_HELP_TYPES)]
+        card = self.journey_card(case_id, res.get("resident_status"), note="Arrival confirmed by shelter check-in.")
+        consent = recovery_consent_card(case_id=case_id, display_name=NAMES.get(case_id, case_id),
+                                        help_types=DEFAULT_HELP_TYPES)
+        resident = self.people.resident_for_case(case_id)
+        volunteer = self.people.volunteer(a["volunteer_id"])
+        if volunteer:
+            await self.send_to(ctx, volunteer.address, card)
+        if resident:  # consent is the resident's to give, in their own chat
+            await self.send_to(ctx, resident.address, card, consent)
+            return [card, f"Asked {resident.display_name} in their own chat whether they want further help."]
+        return [card, consent]
 
     async def case_map(self, case_id: str, corr: str, step_response: dict[str, Any]) -> dict[str, str]:
         """Status color/label always from B: the step response if it has one, else the case record."""
@@ -382,8 +549,11 @@ class Journey:
         rows = [(r["help_type"].replace("_", " ").title(), f"{r['org_id']}: {r['status']}") for r in res.referrals]
         rows += [(h.replace("_", " ").title(), "no matching organization") for h in res.unmatched_help_types]
         rows.append(("Housing secured", "yes" if res.housing_secured else "no (a referral is a request, not housing)"))
-        return info_card(f"Further help · {NAMES.get(case_id, case_id)}", rows,
+        card = info_card(f"Further help · {NAMES.get(case_id, case_id)}", rows,
                          "Post-Calamity agent sent consent-scoped referrals:", "Post-Calamity agent")
+        if self.people.resident_for_case(case_id):  # the resident gave consent; coordinators are told
+            await self.push(ctx, card)
+        return card
 
     # ------------------------------------------------------------ escalation
     async def escalate(self, ctx: Context, case_id: str, corr: str) -> Reply:

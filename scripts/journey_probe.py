@@ -70,6 +70,7 @@ async def say(ctx: Context, message, expect: int = 1) -> list[ChatMessage]:
 @probe.on_event("startup")
 async def run(ctx: Context):
     try:
+        await say(ctx, os.getenv("PROBE_LINK", "LINK COORD-1150"))  # rev 4: link as coordinator first
         await say(ctx, "Start the simulated Zone 3 readiness check", expect=4)
         await say(ctx, "Show road conditions")
         await say(ctx, "Simulate Maria's reply")

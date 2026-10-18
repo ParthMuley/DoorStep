@@ -252,6 +252,84 @@ def recovery_consent_card(*, case_id: str, display_name: str, help_types: list[s
                                    f"recovery help for {display_name.split(' ')[0]}' to consent.\n{_rows_text(rows)}")
 
 
+# ------------------------------------------------------- rev 4: role cards
+
+def link_card(reason: str = "") -> Card:
+    """First contact: link this ASI:One account to a (synthetic) resident, volunteer or coordinator."""
+    payload = {"title": f"{SIM_PREFIX} · Link your account",
+               "fields": [{"name": "code", "kind": "text", "label": "One-time link code (e.g. MARIA-4821)",
+                           "required": True}],
+               "submit_cta": {"label": "Link", "selection": {"action": "link"}}}
+    note = f"{reason} " if reason else ""
+    return Card("form", payload, f"{note}Link this chat first: send `LINK <code>` (demo codes are in the README, "
+                                 "e.g. LINK MARIA-4821). Each code works once.")
+
+
+def checkin_card(*, case_id: str, display_name: str, zone_status: str | None, language: str | None) -> Card:
+    spanish = language == "es"
+    q = ("Aviso SIMULADO: ¿necesita ayuda para salir?" if spanish else
+         "Simulated official warning: do you need help leaving?")
+    rows = [_row("Question", q), _row("Zone", zone_status),
+            _row("Note", "This is a simulation, not an emergency alert. In a real emergency call 911."),
+            _footer(None, "Doorstep check-in")]
+    options = [("1 NEED HELP", "need_help"), ("2 HAVE A PLAN", "have_plan"), ("3 ALREADY LEFT", "already_left"),
+               ("4 CALL ME", "call_me")]
+    payload = {"title": f"{SIM_PREFIX} · Check-in · {display_name}", "summary_rows": rows,
+               "ctas": [{"label": label, "selection": {"action": "checkin", "case_id": case_id, "answer": answer},
+                         "primary": i == 0} for i, (label, answer) in enumerate(options)]}
+    return Card("detail", payload, f"{q} Reply 1 NEED HELP, 2 HAVE A PLAN, 3 ALREADY LEFT or 4 CALL ME.")
+
+
+def needs_confirm_card(*, case_id: str, question: str) -> Card:
+    rows = [_row("Please confirm", question), _footer(None, "Doorstep check-in")]
+    payload = {"title": f"{SIM_PREFIX} · Confirm your needs", "summary_rows": rows,
+               "approve_cta": {"label": "Yes, that's right", "primary": True,
+                               "selection": {"action": "confirm_needs", "case_id": case_id, "answer": "yes"}},
+               "reject_cta": {"label": "No", "selection": {"action": "confirm_needs", "case_id": case_id,
+                                                           "answer": "no"}}}
+    return Card("review", payload, f"{question} (reply yes or no)")
+
+
+def availability_card(*, alert_id: str, volunteer_id: str, org_id: str, calamity: str) -> Card:
+    rows = [_row("Request", f"{org_id} asks: can you help with accessible transport for a simulated "
+                            f"{calamity.lower()} alert?"),
+            _row("Note", "Saying yes means you're available; it is not an assignment. You can decline later."),
+            _footer(None, "Volunteer Network (on the organization's behalf)")]
+    base = {"alert_id": alert_id, "volunteer_id": volunteer_id, "org_id": org_id}
+    payload = {"title": f"{SIM_PREFIX} · Are you available?", "summary_rows": rows,
+               "approve_cta": {"label": "Yes, I'm available", "primary": True,
+                               "selection": {"action": "availability", "available": True, **base}},
+               "reject_cta": {"label": "Not now", "selection": {"action": "availability", "available": False, **base}}}
+    return Card("review", payload, "Are you available to help (simulated)? Reply yes or no.")
+
+
+def assignment_card(*, case_id: str, assignment_id: str, volunteer_id: str, shared: dict[str, Any],
+                    shelter: str, eta_minutes: int | None) -> Card:
+    rows = [_row("Needs (codes)", ", ".join(str(n) for n in shared.get("needs", [])) or "-"),
+            _row("Pets", shared.get("pet_count", 0)), _row("Language", shared.get("language")),
+            _row("Pickup area", shared.get("pickup_area")), _row("Shelter", shelter),
+            _row("Estimate", f"about {eta_minutes} min to pickup (estimate, not a guarantee)"
+                 if eta_minutes is not None else "no estimate"),
+            _row("Note", "The exact pickup point is shared only after you accept. Declining is always okay."),
+            _footer(None, "Doorstep matching")]
+    base = {"case_id": case_id, "assignment_id": assignment_id, "volunteer_id": volunteer_id}
+    payload = {"title": f"{SIM_PREFIX} · New assignment for {volunteer_id}", "summary_rows": rows,
+               "approve_cta": {"label": "Accept", "primary": True, "selection": {"action": "volunteer_accept", **base}},
+               "reject_cta": {"label": "Decline", "selection": {"action": "volunteer_decline", **base}}}
+    return Card("review", payload, "A simulated assignment needs your answer: accept or decline.")
+
+
+def pickup_confirm_card(*, case_id: str, who: str) -> Card:
+    text = ("Confirm only once the resident is in your vehicle." if who == "volunteer"
+            else "Confirm only once you are in the volunteer's vehicle.")
+    rows = [_row("When", text), _row("Note", "Pickup is not arrival. Both of you confirm separately."),
+            _footer(None, "Doorstep journey")]
+    payload = {"title": f"{SIM_PREFIX} · Confirm pickup", "summary_rows": rows,
+               "ctas": [{"label": "Confirm pickup", "primary": True,
+                         "selection": {"action": "confirm_pickup", "case_id": case_id}}]}
+    return Card("detail", payload, f"{text} Reply 'confirm pickup' when it happens.")
+
+
 def info_card(title: str, rows: list[tuple[str, Any]], narration_intro: str, source: str,
               data_as_of: str | None = None) -> Card:
     """Generic read-only card (alerts, outreach, road conditions, data health)."""
