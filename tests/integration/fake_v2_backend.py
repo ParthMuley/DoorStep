@@ -1,6 +1,7 @@
 """B's REAL app for A's integration tests (contract v2.1, in-memory Mongo), plus ONE
-stand-in for a rev 4 route B hasn't built yet: `POST /link` (contract v2.2 ask, plan
-§0.4-0.5). Delete it when B ships `/link`; tests must keep passing against B.
+stand-ins for routes B hasn't built yet: `POST /link` (rev 4, contract v2.2 ask) and
+`POST /register` (rev 5; it calls B's real registration routes). Delete them when B
+ships them; tests must keep passing against B.
 Never used outside tests and `scripts/dev_backend_v2.py` (DEV ONLY).
 """
 
@@ -34,6 +35,7 @@ LINK_CODES = {
 
 def build_link_standin(spent: dict[str, str]) -> APIRouter:
     r = APIRouter()
+    state_counter: list[str] = []
 
     @r.post("/link")
     async def link(request: Request, x_agent_token: str | None = Header(default=None)):
@@ -47,6 +49,36 @@ def build_link_standin(spent: dict[str, str]) -> APIRouter:
             return JSONResponse(status_code=409, content={"error": "CODE_SPENT", "detail": "code already used"})
         spent[code] = address
         return {"schema_version": "2.0", "asi_one_address": address, **LINK_CODES[code]}
+
+    @r.post("/register")
+    async def register(request: Request, x_agent_token: str | None = Header(default=None)):
+        """Stand-in for plan rev 5: uses B's REAL registration routes, then links the address."""
+        if x_agent_token != doorstep_agent_token():
+            return JSONResponse(status_code=401, content={"error": "UNAUTHORIZED", "detail": "Doorstep agent token"})
+        body = await request.json()
+        auth = {"Authorization": request.headers.get("authorization", "")}
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=request.app), base_url="http://in") as c:
+            if body["role"] == "RESIDENT":
+                res = await c.post("/residents", headers=auth, json={"resident": body["profile"]})
+                if res.status_code >= 400:
+                    return JSONResponse(status_code=res.status_code, content=res.json())
+                rid = res.json()["resident_id"]
+                return {"schema_version": "2.0", "role": "RESIDENT", "resident_id": rid, "case_id": f"case_{rid}",
+                        "display_name": body["profile"]["name"], "sender_for_backend": body["profile"]["phone"]}
+            lon, lat = body["profile"]["location"]["coordinates"]
+            near = (await c.get("/regions/near", params={"lat": lat, "lon": lon})).json().get("regions", [])
+            region = next((g for g in near if g.get("distance_km", 1) == 0), None)
+            if region is None:
+                return JSONResponse(status_code=409, content={"error": "NO_REGION",
+                                                              "detail": "no partner region covers this location"})
+            vid = f"volunteer_self_{len(spent) + len(state_counter) + 1:03d}"
+            state_counter.append(vid)
+            res = await c.post(f"/regions/{region['region_id']}/orgs/{body['org_id']}/volunteers", headers=auth,
+                               json={"volunteer": {"volunteer_id": vid, **body["profile"]}})
+            if res.status_code >= 400:
+                return JSONResponse(status_code=res.status_code, content=res.json())
+            return {"schema_version": "2.0", "role": "VOLUNTEER", "volunteer_id": vid, "org_id": body["org_id"],
+                    "display_name": body["profile"]["name"], "approved": False}
 
     return r
 

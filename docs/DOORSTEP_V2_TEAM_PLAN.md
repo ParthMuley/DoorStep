@@ -1,4 +1,4 @@
-# DOORSTEP V2 — Two-Person Plan (Fetch.ai track) — revision 4
+# DOORSTEP V2 — Two-Person Plan (Fetch.ai track) — revision 5
 
 *Shared plan for Developer A and Developer B. Both Claude Code sessions read this file. Change only by PR, agreed by both. Revision 2 (2026-10-17) re-aligned the plan with the team's original idea and switched to MongoDB. **Revision 3 (2026-10-17, proposed by A, agreed by B):**
 - no agent per organization: one Volunteer Network agent serves all partner orgs;
@@ -11,6 +11,38 @@
 - B's amendments (§0.5): the sender address must come from the authenticated Doorstep agent, the demo link codes are public, and a 15-minute reply deadline applies.
 
 See §0 (rev 4), §0.5 (amendments) and §0b (rev 3).*
+
+## 00. Revision 5 (2026-10-18, proposed by A, pending B's agreement): self-registration in ASI:One
+
+**Why:** today a person can only link to a record that already exists (seeded one-time codes). Revision 5 lets a resident or a volunteer **register themselves in their own ASI:One chat**, before a disaster, and be linked in the same step.
+
+**Fetch / ASI:One limits (verified in the card docs):** inputs are only `text`, `number`, `email`, `select` and `checkbox`. There is no location picker, no map input and no device location, and an agent never receives GPS. So the person **types an address and the agent geocodes it** with HERE Geocoding (`/v1/geocode`, same `HERE_API_KEY`, free tier).
+
+**Flow (Doorstep agent):**
+1. Unlinked chat → link card **plus** "Register as resident" / "Register as volunteer".
+2. **Resident form:** name (synthetic label is fine), language (`en`/`es`), address, needs checkboxes (codes 1–10), pet count, consents (check-ins, transport, destination; recovery stays per-request).
+   **Volunteer form:** name, organization (`select` of approved orgs), address, vehicle type, seats, wheelchair spaces, pet capacity, capability checkboxes.
+3. **Geocode** (HERE, `in=countryCode:USA`, `limit=2`):
+   - `HIGH` only if the top result is a house number or street with `queryScore ≥ 0.9` and no near-tie with a second result;
+   - otherwise ask the person to rephrase, and never register a guessed location;
+   - no result → `FAILED`, nothing registered.
+4. **Confirm card:** "We found: <HERE's label>" plus rounded coordinates → Confirm / Change. Nothing is stored before Confirm.
+5. **Register + link in one call** (needs B): `POST /register` with `X-Agent-Token: DOORSTEP_AGENT_TOKEN`:
+   ```json
+   {"role":"RESIDENT"|"VOLUNTEER","asi_one_address":"<envelope sender>","profile":{…ResidentProfile or volunteer fields…},"org_id":"…"}
+   ```
+   - B creates the record (residents → `POST /residents` rules; volunteers → the region found from their location) and links the address.
+   - It returns the same shape as `POST /link` (role, `resident_id` + `case_id` or `volunteer_id` + `org_id`).
+   - The ASI:One address becomes the person's contact (`channel: ASI_ONE`).
+6. **Volunteers start unapproved** (`approved: false`): they're never matched until their organization approves them. Needs B: `POST /orgs/{org_id}/volunteers/{volunteer_id}/approve` (coordinator, demo token). A will add a coordinator card listing pending volunteers.
+
+**Privacy rules for addresses:**
+- Agents never log the address text. It goes only to HERE for geocoding, and B stores the coordinates plus `geocode_confidence`, with address label `"SELF-REGISTERED (demo)"`, not the street address.
+- The form says **"Demo: use a fictional or public-place address"**.
+- `GET` endpoints never return a person's coordinates (B's existing rule).
+- `LOW`/`FAILED` → zone `UNKNOWN`, never safe (B's existing rule).
+
+**Until B ships `POST /register`:** A uses a stand-in in `tests/integration/fake_v2_backend.py` that calls B's real `POST /residents` and `POST /regions/{region}/orgs/{org}/volunteers` and then links the address.
 
 ## 0. What changed in revision 4 (and why)
 

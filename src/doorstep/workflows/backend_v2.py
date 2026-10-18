@@ -175,6 +175,13 @@ class DoorstepBackendV2(DoorstepBackend):
                                    self._v2(correlation_id, code=code, asi_one_address=asi_one_address),
                                    extra_headers={"X-Agent-Token": doorstep_agent_token()})
 
+    async def register(self, role: str, asi_one_address: str, profile: dict[str, Any], org_id: str | None,
+                       correlation_id: str) -> dict[str, Any]:
+        """`POST /register` (plan rev 5): create the person and link the envelope sender."""
+        return await self._request("POST", "/register", correlation_id, self._v2(
+            correlation_id, role=role, asi_one_address=asi_one_address, profile=profile, org_id=org_id),
+            extra_headers={"X-Agent-Token": doorstep_agent_token()})
+
     async def resident_reply(self, case_id: str, text: str, sender: str, correlation_id: str,
                              language: str | None = None, external_id: str | None = None) -> dict[str, Any]:
         """Resident answer arriving through the Doorstep agent (carries the Doorstep token)."""

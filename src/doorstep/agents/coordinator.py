@@ -29,7 +29,8 @@ from doorstep.agents import coordinator_actions as actions
 from doorstep.agents.base import address_for, register_with_backend
 from doorstep.agents.journey import Journey
 from doorstep.integrations.agentverse_setup import enable_auto_mailbox
-from doorstep.agents.links import Link, link_code_from_text, link_from_backend
+from doorstep.agents.links import MENTION, Link, link_code_from_text, link_from_backend
+from doorstep.agents.registration import Registration, choice_card
 from doorstep.integrations.asi_cards import (
     DEMO_PREFIX,
     Card,
@@ -91,6 +92,7 @@ def get_v2_backend() -> DoorstepBackendV2:
 
 
 journey = Journey(lambda: get_v2_backend(), lambda role: address_for(role))
+registration = Registration(lambda: get_v2_backend())
 
 
 def make_chat_reply(text: str) -> ChatMessage:
@@ -222,8 +224,12 @@ async def route(ctx: Context, text: str, correlation_id: str, sender: str = ""):
     if code:
         return await link_account(ctx, sender, str(code).strip().upper(), correlation_id)
     link = journey.people.get(ctx, sender)
+    if link is None:
+        reg = await registration_route(ctx, sender, text, selection, correlation_id)
+        if reg is not None:
+            return reg
     if link is None and require_link():
-        return [f"Welcome to Doorstep (simulation). {HELP_TEXT}", link_card()]
+        return [link_card(), choice_card()]
     if link is not None and link.role == "RESIDENT":
         return await resident_route(ctx, link, text, selection, correlation_id)
     if link is not None and link.role == "VOLUNTEER":
@@ -234,8 +240,28 @@ async def route(ctx: Context, text: str, correlation_id: str, sender: str = ""):
     return await run_intent(ctx, intent, correlation_id, sender)
 
 
+async def registration_route(ctx: Context, sender: str, text: str, sel: dict, corr: str):
+    """Self-registration for unlinked chats (plan rev 5). Returns None when not a registration step."""
+    action, word = sel.get("action"), MENTION.sub("", text).strip().lower()
+    if action == "register_start" or word in ("register as resident", "register as volunteer"):
+        role = sel.get("role") or ("VOLUNTEER" if "volunteer" in word else "RESIDENT")
+        return await registration.start(role, corr)
+    if action == "register_submit":
+        return await registration.submit(sender, sel, corr)
+    if action == "register_confirm" or (word == "confirm" and sender in registration.pending):
+        link, error = await registration.confirm(sender, corr)
+        if link is None:
+            return error
+        journey.people.put(ctx, link)
+        if link.role == "RESIDENT":
+            return f"Registered and linked as {link.display_name} (resident). " + RESIDENT_HELP
+        return (f"Registered and linked as {link.display_name} (volunteer). Your organization must approve you "
+                "before you can be matched. " + VOLUNTEER_HELP)
+    return None
+
+
 def _word(text: str) -> str:
-    return text.strip().lower().rstrip(".!")
+    return MENTION.sub("", text).strip().lower().rstrip(".!")
 
 
 async def resident_route(ctx: Context, link: Link, text: str, sel: dict, corr: str):

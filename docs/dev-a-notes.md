@@ -142,3 +142,18 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   1. `POST /link {code, asi_one_address}` with `X-Agent-Token: DOORSTEP_AGENT_TOKEN`. It should return `role`, `display_name` and `resident_id`+`case_id` / `volunteer_id`+`org_id` / `coordinator_id`. 409 for an unknown or spent code.
   2. `POST /cases/{id}/responses`: accept `sender` = the linked ASI:One address when the Doorstep token is present. Until then, the stand-in returns `sender_for_backend` (the seeded sim contact), and Doorstep sends that.
   3. `POST /deadlines/sweep`: the client method exists (`deadline_sweep`), but the Calamity Checker doesn't call it yet, and B hasn't built the route.
+
+### Rev 5: self-registration in ASI:One with HERE geocoding (2026-10-18)
+- `agents/registration.py`:
+  - an unlinked chat gets the link card plus "Register as resident/volunteer";
+  - form card → `integrations/geocoder.py` (HERE `/v1/geocode`; HIGH only for a house number or street with score ≥ 0.9 and no near-tie; otherwise ask again);
+  - confirm card → `POST /register` (stand-in until B builds it) → linked.
+  - The address text is never logged or stored, only coordinates. Self-registered volunteers are `approved: false`.
+- **Tests:** `tests/integration/test_rev5_registration.py` (confidence rules, plus a resident and a volunteer registering over agents; the new resident then gets a real check-in after the alert). **243 tests pass.**
+- **Asks for B (plan §00):**
+  - `POST /register` (create + link in one call);
+  - `POST /orgs/{org}/volunteers/{vid}/approve` for coordinators;
+  - store the address label as `SELF-REGISTERED (demo)`, coordinates only.
+- **Known limits:**
+  - A real address outside the synthetic regions registers a resident (zone `OUTSIDE_KNOWN_ZONES`) but refuses a volunteer (`NO_REGION`).
+  - No coordinator approval card yet.
