@@ -142,7 +142,7 @@ class ClosureItem(DoorstepModel):
     url: Optional[str] = None
     headline: Optional[str] = None
     raw_text: Optional[str] = None
-    extraction_method: Literal["STRUCTURED_FEED", "ASI_ONE_EXTRACTION"] = "STRUCTURED_FEED"
+    extraction_method: Literal["STRUCTURED_FEED", "ASI_ONE_EXTRACTION", "KEYWORD_EXTRACTION"] = "STRUCTURED_FEED"
     candidate: ClosureCandidate
 
 
