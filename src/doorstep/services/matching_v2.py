@@ -8,6 +8,7 @@ Pickup/arrival reuse the engine's evidence rules.
 
 from __future__ import annotations
 
+import math
 import os
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -31,7 +32,7 @@ from doorstep.models import (
 
 from . import geo
 from .errors import Conflict, ConsentRequired, InvalidTransition, NotFound, SafetyRejection, Unauthorized
-from .volunteer_matching import Candidate, eta_minutes, evaluate_shelters, evaluate_volunteers
+from .volunteer_matching import Candidate, apply_drive_times, eta_minutes, evaluate_shelters, evaluate_volunteers
 
 if TYPE_CHECKING:  # pragma: no cover
     from .engine import DoorstepService
@@ -105,7 +106,8 @@ class MatchService:
     # ------------------------------------------------------------- propose
     def propose(self, case_id: str, *, idempotency_key: Optional[str] = None, create_proposal: bool = True,
                 authorization: str = PREAPPROVED, select_volunteer: Optional[str] = None,
-                select_site: Optional[str] = None, correlation_id: Optional[str] = None) -> tuple[dict, bool]:
+                select_site: Optional[str] = None, correlation_id: Optional[str] = None,
+                drive_minutes: Optional[dict[str, float]] = None) -> tuple[dict, bool]:
         eng = self.engine
         case = self.store.get_case(case_id)
         eng.deadlines.apply()  # volunteers past their reply deadline count as NO_REPLY
@@ -129,11 +131,15 @@ class MatchService:
 
         ctx = self._context(case)
         vols, sites = self._evaluate(case, ctx)
+        ignored = apply_drive_times(vols, drive_minutes)  # re-orders eligible only; eligibility unchanged
         zone_status = ctx["zone"]["zone_status"]
         blocked = BLOCKING_ZONES.get(zone_status)
         base = {"case_id": case_id, "alert_id": ctx["alert_id"], "zone_status": zone_status,
                 "evaluation": {"volunteers": self._split(vols, "volunteer"), "shelters": self._split(sites, "shelter")},
+                "ranking": "DRIVE_TIME" if drive_minutes else "DISTANCE",
                 "correlation_id": corr}
+        if ignored:
+            base["drive_minutes_ignored"] = ignored
 
         if blocked and (select_volunteer or select_site):
             raise SafetyRejection(f"Resident zone is {zone_status}", code=blocked[1], reasons=[blocked[0]])
@@ -199,7 +205,8 @@ class MatchService:
                 req.status = S.AWAITING_PROVIDER
                 self.store.save_request(req)
             aid = self.db.next_id("assign")
-            eta = eta_minutes(chosen.distance_km)
+            drive = chosen.extra.get("drive_minutes")
+            eta = max(1, math.ceil(drive)) if drive is not None else eta_minutes(chosen.distance_km)
             transport = Assignment(
                 assignment_id=aid, case_id=case_id, request_id=request_id, offer_id=chosen.entity_id,
                 provider_id=chosen.org_id, service_type=TRANSPORT, provider_approved=True,
@@ -225,7 +232,8 @@ class MatchService:
             self.events.append("MATCH_PROPOSED", case_id=case_id, correlation_id=corr,
                                data={"assignment_id": aid, "org_id": chosen.org_id, "volunteer_id": chosen.entity_id,
                                      "site_id": site.entity_id if site else (shelter_row.site_id if shelter_row else None),
-                                     "distance_km": chosen.distance_km})
+                                     "distance_km": chosen.distance_km,
+                                     "drive_minutes": chosen.extra.get("drive_minutes")})
             self.events.append("VOLUNTEER_RESERVED", case_id=case_id, correlation_id=corr,
                                data={"org_id": chosen.org_id, "volunteer_id": chosen.entity_id})
             if case.resident_status == R.REQUIRES_COORDINATOR:
@@ -251,6 +259,7 @@ class MatchService:
                                       "language": profile.language,
                                       "pickup_area": f"{case.sector_id or case.zone_id} (synthetic)"},
             "eta_estimate": {"minutes": eta, "label": ETA_LABEL}, "idempotency_key": key,
+            "drive_minutes": chosen.extra.get("drive_minutes"),
         }
         result = {**base, "escalation_required": False, "no_match_reason": None, "match": match}
         self._remember(key, result)

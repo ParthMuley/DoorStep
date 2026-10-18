@@ -150,7 +150,7 @@ Every role: `LINK <code>`, `UNLINK` (demo), `register as resident` / `register a
 **Answers to A's questions:**
 - **Deploy:** Render + MongoDB Atlas (free), public https at `https://<service>.onrender.com`, serving `/maps`. B sets it up; tokens go to A privately.
 - **ETA:** use HERE's when there's an `ILLUSTRATIVE_ONLY` route. B already replaces its straight-line estimate with the preview's `duration_s`. **Send the first section's duration (volunteer → pickup), not the whole trip.**
-- **Drive-time ranking:** B ranks, so every matching decision stays in one tested place. B will accept optional `drive_minutes: {volunteer_id: minutes}` on `/matches/propose` and rank the *eligible* volunteers by it, falling back to distance. Eligibility never changes. Not built yet: say when you need it.
+- **Drive-time ranking:** B ranks, so every matching decision stays in one tested place. `/matches/propose` accepts optional `drive_minutes: {volunteer_id: minutes}` and ranks the *eligible* volunteers by it, falling back to distance. Eligibility never changes. **Built** (contract §5.6). The Matching agent can get B's top eligible volunteers with `create_proposal: false`, ask the Route agent / HERE for drive times, then propose with `drive_minutes`. The ETA then comes from the drive time.
 - **Approval:** agreed. Org-imported volunteers keep the approval the org gives them (default yes); self-registered ones start unapproved.
 - **Maps:** 24 h and ≤ 300 KB are fine (`MAP_TTL_HOURS` configurable).
 

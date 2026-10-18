@@ -330,3 +330,44 @@ def test_v2_scenarios_end_to_end(client):
     assert run_scenario_b_v2(client, log=quiet)["unresolved"] is True
     client.post("/demo/reset")
     assert run_scenario_c_v2(client, log=quiet)["zone_status"] == "STALE"
+
+
+# ------------------------------------------------------------ drive-time ranking
+def test_drive_times_reorder_eligible_only(svc):
+    ready(svc)
+    base = propose(svc, create_proposal=False)
+    assert base["ranking"] == "DISTANCE"
+    assert [v["volunteer_id"] for v in base["evaluation"]["volunteers"]["eligible"]] == ["volunteer_sarah", "volunteer_lee"]
+    # HERE says Lee is faster by road; Joe (not eligible) gets a drive time too but stays rejected.
+    drive = {"volunteer_sarah": 9.0, "volunteer_lee": 4.2, "volunteer_joe": 1.0, "volunteer_ghost": 2.0}
+    view = propose(svc, create_proposal=False, drive_minutes=drive)
+    eligible = view["evaluation"]["volunteers"]["eligible"]
+    assert view["ranking"] == "DRIVE_TIME"
+    assert [(v["volunteer_id"], v["rank"], v["drive_minutes"]) for v in eligible] == [
+        ("volunteer_lee", 1, 4.2), ("volunteer_sarah", 2, 9.0)]
+    rejected = {v["volunteer_id"]: v for v in view["evaluation"]["volunteers"]["rejected"]}
+    assert "NEEDS_NOT_COVERED" in rejected["volunteer_joe"]["reason_codes"] and "rank" not in rejected["volunteer_joe"]
+    assert view["drive_minutes_ignored"] == ["volunteer_ghost"]
+
+
+def test_drive_time_picks_volunteer_and_sets_eta(svc):
+    ready(svc)
+    view = propose(svc, drive_minutes={"volunteer_lee": 4.2, "volunteer_sarah": 9.0})
+    match = view["match"]
+    assert match["volunteer_id"] == "volunteer_lee" and match["drive_minutes"] == 4.2
+    assert match["eta_estimate"]["minutes"] == 5  # ceil(4.2), not the straight-line estimate
+    assert svc.store.get_assignment(match["assignment_id"]).eta_minutes == 5
+
+
+def test_volunteers_without_drive_time_rank_after(svc):
+    ready(svc)
+    eligible = propose(svc, create_proposal=False, drive_minutes={"volunteer_lee": 30.0})["evaluation"]["volunteers"]["eligible"]
+    assert [v["volunteer_id"] for v in eligible] == ["volunteer_lee", "volunteer_sarah"]
+    assert "drive_minutes" not in eligible[1]
+
+
+def test_drive_minutes_validated_over_http(client):
+    for bad in ({"volunteer_sarah": -1}, {"volunteer_sarah": 601}, {f"v{i}": 1 for i in range(201)}):
+        r = client.post("/matches/propose", json={"schema_version": "2.0", "case_id": MARIA, "create_proposal": False,
+                                                  "drive_minutes": bad})
+        assert r.status_code == 422, r.text

@@ -325,6 +325,11 @@ Never includes addresses, phones or free-text replies.
  "authorization":"SIMULATED_PREAPPROVED","select":{"volunteer_id":null,"site_id":null}}
 ```
 - `create_proposal:false` = "show suitable volunteers" (evaluation only).
+- **v2.2 `drive_minutes`** (optional): `{"volunteer_sarah": 9.0, "volunteer_lee": 4.2}`, minutes by road, e.g. from HERE via the Matching agent; 0–600 per entry, at most 200 entries (422 otherwise).
+  - It **re-orders the eligible volunteers only**: those with a drive time come first, shortest first; the rest follow in distance order. **Eligibility never changes.**
+  - Eligible entries gain `drive_minutes`; the response gains `"ranking": "DRIVE_TIME"` (else `"DISTANCE"`) and `drive_minutes_ignored` for IDs that matched no volunteer.
+  - When the chosen volunteer has a drive time, `match.eta_estimate.minutes = ceil(drive_minutes)` (still "estimate, not a guarantee") and `match.drive_minutes` is set.
+  - A replay with the same `idempotency_key` returns the stored result, so send a new key to re-rank.
 - `select` picks a specific volunteer/site (e.g. the next one after a decline). Otherwise B takes the top-ranked.
 - Volunteers who declined this case are excluded.
 
@@ -635,6 +640,7 @@ All carry `schema_version, correlation_id, created_at`, plus `case_id` / `alert_
 - Case view: `contact`, `reachability`, `reply_by`. Availability: `asked_at`, `reply_by`, optional `sender`.
 - `/closures/ingest` accepts `KEYWORD_EXTRACTION` and `UNCLEAR` (§5.9).
 - `ROUTE_MAX_AVOID_AREAS` default 250 → 20.
+- `/matches/propose` accepts optional `drive_minutes` (§5.6).
 - Not built: B-side `notify` lists for check-ins and outreach. A's Doorstep agent composes its own role cards, so only the sweep returns a `notify` list. Add more if A needs them.
 
 ## 8b. Migration from v1.0

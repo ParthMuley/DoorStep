@@ -9,7 +9,9 @@ Volunteer is eligible only if ALL hold:
 * resident zone is not ORDER / STALE / UNKNOWN (checked by the caller);
 * within the org's service radius; the straight line volunteer → resident does not
   pass through an active ORDER polygon (illustrative check; real routing is B6).
-Ranking: distance volunteer → resident, then volunteer_id.
+Ranking: distance volunteer → resident, then volunteer_id. Optional drive times from the
+Matching agent (HERE) re-order ONLY the eligible volunteers (`apply_drive_times`); they never
+change who is eligible.
 """
 
 from __future__ import annotations
@@ -164,6 +166,29 @@ def evaluate_shelters(profile: ResidentProfile, calamity_type: str, entries: lis
                                  reason_codes=reasons, missing_needs=missing if not eligible else [],
                                  extra={"site_name": s.name, "region_id": region.region_id}))
     return _rank(out)
+
+
+MAX_DRIVE_MINUTES = 600.0
+
+
+def apply_drive_times(cands: list[Candidate], drive_minutes: Optional[dict[str, float]]) -> list[str]:
+    """Re-rank eligible volunteers by drive time (minutes, e.g. from HERE via the Matching agent).
+    Volunteers with a drive time come first (shortest first); the rest keep distance order after
+    them; ties break on distance, then volunteer_id. Rejected volunteers are untouched.
+    Returns the ids in ``drive_minutes`` that matched no candidate (ignored)."""
+    if not drive_minutes:
+        return []
+    known = {c.entity_id for c in cands}
+    for c in cands:
+        if c.entity_id in drive_minutes:
+            c.extra["drive_minutes"] = round(float(drive_minutes[c.entity_id]), 1)
+    eligible = sorted((c for c in cands if c.eligible),
+                      key=lambda c: (c.entity_id not in drive_minutes, drive_minutes.get(c.entity_id, 0.0),
+                                     c.distance_km, c.entity_id))
+    for i, c in enumerate(eligible, start=1):
+        c.rank = i
+    cands.sort(key=lambda c: (not c.eligible, c.rank or 0, c.distance_km, c.entity_id))
+    return sorted(set(drive_minutes) - known)
 
 
 def eta_minutes(distance_km: float) -> int:

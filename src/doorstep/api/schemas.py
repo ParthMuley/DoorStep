@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import Any, Literal, Optional
 
+from pydantic import field_validator
+
 from doorstep.models import (
     DestinationOfferIn,
     DoorstepModel,
@@ -254,6 +256,21 @@ class ProposeMatchBody(Body):
     create_proposal: bool = True
     authorization: str = "SIMULATED_PREAPPROVED"
     select: Optional[MatchSelect] = None
+    # Optional drive times (minutes) per volunteer_id, e.g. from HERE via the Matching agent.
+    # Re-orders eligible volunteers only; never changes eligibility (contract v2.2 §5.6).
+    drive_minutes: Optional[dict[str, float]] = None
+
+    @field_validator("drive_minutes")
+    @classmethod
+    def _drive(cls, v: Optional[dict[str, float]]) -> Optional[dict[str, float]]:
+        if v is None:
+            return v
+        if len(v) > 200:
+            raise ValueError("drive_minutes: at most 200 volunteers")
+        for vid, minutes in v.items():
+            if not (minutes == minutes and 0 <= minutes <= 600):  # rejects NaN, negatives, > 10 h
+                raise ValueError(f"drive_minutes[{vid}] must be between 0 and 600")
+        return v
 
 
 class AcceptV2Body(Body):

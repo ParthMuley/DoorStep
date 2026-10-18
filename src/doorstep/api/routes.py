@@ -379,7 +379,7 @@ def matches_propose(body: s.ProposeMatchBody, corr: Optional[str] = Depends(corr
     view, created = service.matching.propose(
         body.case_id, idempotency_key=body.idempotency_key, create_proposal=body.create_proposal,
         authorization=body.authorization, select_volunteer=sel.volunteer_id, select_site=sel.site_id,
-        correlation_id=pick(corr, body))
+        correlation_id=pick(corr, body), drive_minutes=body.drive_minutes)
     return out(view, 201 if created else 200, V2)
 
 
