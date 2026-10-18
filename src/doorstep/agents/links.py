@@ -28,8 +28,11 @@ class Link:
     backend_sender: str | None = None  # what B accepts as `sender` for this person's answers
 
 
+MENTION = re.compile(r"^\s*(?:@\S+\s*)+")  # ASI:One prefixes messages with "@agent1q..." mentions
+
+
 def link_code_from_text(text: str) -> str | None:
-    m = LINK_TEXT.match(text)
+    m = LINK_TEXT.match(MENTION.sub("", text))
     return m.group(1).upper() if m else None
 
 

@@ -120,3 +120,9 @@ Sources: [avoid areas](https://docs.here.com/routing/docs/routing-v8-avoid-area)
 - **Violations:** a route that can't avoid an area carries the critical notice `violatedBlockedRoad`. If HERE finds no route, there is none (`noRouteFound`).
 - **Request:** `via=lat,lng` adds the pickup stop, and each leg is a `section` (the first leg's duration is the ETA to the resident). `return=polyline,summary,actions,instructions`; the polyline is decoded with HERE's `flexpolyline` (PyPI 0.1.0).
 - **Free tier:** tests never call HERE (`httpx.MockTransport`). Live, there is one call per accepted assignment, cached by idempotency key, with a daily cap (`HERE_MAX_CALLS_PER_DAY`, default 50; past it, `HERE_DAILY_CAP_REACHED`, no call). Without a key the agent returns `HERE_NOT_CONFIGURED` and makes no call.
+
+## ASI:One live behaviours seen in the browser demo (2026-10-18)
+- Every user message arrives prefixed with `@agent1q…` (the agent mention). Text commands must ignore leading mentions; `LINK <code>` was fixed for this.
+- Pressing Enter in the composer can insert a newline; the send arrow sends.
+- The form card (link code) and review/detail cards render, and their submits/clicks arrive as JSON selections (form values merged).
+- **Several agent messages sent for one user turn are merged into one bubble** (newest first), and only the last card renders as a card. Follow-up: send one combined card per turn (or space out pushes).
