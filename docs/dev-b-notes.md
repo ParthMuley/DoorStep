@@ -134,7 +134,7 @@ Expected for David: every offer rejected with `ACTIVE_ORDER_ZONE`, `escalation_r
 
 ## Known limitations
 
-- Spanish templates still need review by a fluent speaker.
+- Spanish templates still need review by a fluent speaker: send them `docs/spanish-review.md`.
 - No one-time pickup codes beyond the `code_verified` flag.
 - Bearer token is demo gating only.
 - No Sentry on the backend yet.

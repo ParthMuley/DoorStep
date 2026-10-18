@@ -26,7 +26,7 @@ _INTENT_NUMBERS = {"1": ResponseIntent.NEED_HELP, "2": ResponseIntent.HAS_PLAN,
 _PICKUP_PHRASES = ["picked up", "pickup done", "recogido", "recogida", "ya me recogieron", "me recogieron"]
 
 _INTENT_PHRASES = [
-    (ResponseIntent.CALL_ME, ["call me", "llamame", "llamenme", "llamar"]),
+    (ResponseIntent.CALL_ME, ["call me", "llamame", "llameme", "llamenme", "llamar"]),
     (ResponseIntent.ALREADY_LEFT, ["already left", "ya sali", "ya me fui", "ya me sali"]),
     (ResponseIntent.HAS_PLAN, ["have a plan", "tengo un plan", "i have a plan"]),
     (ResponseIntent.NEED_HELP, ["need help", "help", "necesito ayuda", "ayuda", "ayudenme"]),
