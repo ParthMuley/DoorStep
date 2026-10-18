@@ -18,6 +18,16 @@ MARIA_SENDER = seed.MARIA_SENDER
 DAVID_SENDER = seed.DAVID_SENDER
 DAVID_CAREGIVER_SENDER = seed.DAVID_CAREGIVER_SENDER
 TOKEN = "change-me-local-demo-token"
+AGENT_TOKEN_ENV = ("DEMO_AUTH_TOKEN", "NETWORK_AGENT_TOKEN", "DOORSTEP_AGENT_TOKEN", "ROUTE_AGENT_TOKEN",
+                   "CALAMITY_AGENT_TOKEN", "REPLY_DEADLINE_MINUTES", "PUBLIC_BASE_URL", "MAP_TTL_HOURS",
+                   "ROUTE_MAX_AVOID_AREAS", "RENDER_EXTERNAL_URL")
+
+
+@pytest.fixture(autouse=True)
+def hermetic_env(monkeypatch):
+    """A developer's .env must not change unit-test results (A's note, 2026-10-18)."""
+    for name in AGENT_TOKEN_ENV:
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture

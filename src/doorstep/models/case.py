@@ -52,6 +52,7 @@ class Case(DoorstepModel):
     next_step: str = ""
     correlation_id: str = ""
     alert_id: Optional[str] = None
+    reply_by: Optional[str] = None  # check-in sent + REPLY_DEADLINE_MINUTES (plan rev 4 §0.5.3)
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
     simulated: bool = True

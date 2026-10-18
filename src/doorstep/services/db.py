@@ -31,6 +31,7 @@ USERS_COLLECTIONS = [
     "messages", "escalations", "referrals", "consent_grants", "events", "settings", "counters",
     "zone_alerts", "feeds", "ingests", "checkins", "synthetic_feed", "match_results",
     "closures", "synthetic_closure_feed", "route_requests", "route_previews",
+    "links", "link_codes", "maps",
 ]
 
 

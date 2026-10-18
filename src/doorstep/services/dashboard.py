@@ -53,6 +53,7 @@ class DashboardService:
     # -------------------------------------------------------------- summary
     def summary(self) -> dict[str, Any]:
         eng = self.engine
+        eng.deadlines.apply()
         cases = self.store.list_cases()
         counts = {s: 0 for s in STATUS_ORDER}
         unresolved = []
@@ -61,7 +62,9 @@ class DashboardService:
             view = eng.get_case_status(c.case_id)
             if view["unresolved"]:
                 escalations = self.store.escalations_for_case(c.case_id)
-                reason = escalations[-1].reason if escalations else c.resident_status
+                reason = (escalations[-1].reason if escalations else
+                          "NO_REPLY_AFTER_DEADLINE" if c.communication_status == "NO_REPLY_AFTER_DEADLINE"
+                          else c.resident_status)
                 unresolved.append({"case_id": c.case_id, "display_name": view["display_name"], "reason": reason,
                                    "zone_status": view["zone_status"], "next_step": c.next_step})
         alerts = eng.alerts._alerts({"active": True, "source_type": "OFFICIAL_SIMULATION"})
@@ -102,6 +105,7 @@ class DashboardService:
         }
 
     def cases(self) -> dict[str, Any]:
+        self.engine.deadlines.apply()
         out = []
         for c in self.store.list_cases():
             view = self.engine.get_case_status(c.case_id)

@@ -24,6 +24,12 @@ class Unauthorized(DomainError):
     code = "UNAUTHORIZED"
 
 
+class Unauthenticated(DomainError):
+    """Missing or wrong agent token (401)."""
+    status_code = 401
+    code = "UNAUTHORIZED"
+
+
 class Conflict(DomainError):
     status_code = 409
     code = "CONFLICT"

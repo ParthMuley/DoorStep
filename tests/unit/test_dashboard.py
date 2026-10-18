@@ -54,7 +54,7 @@ def test_summary_counts_unresolved_and_health(client):
     assert body["alerts"]["feed_freshness"] == "FRESH"
     assert body["outreach"]["orgs_contacted"] == 3 and body["outreach"]["volunteers_available"] == 3
     health = client.get("/health").json()
-    assert health["version"] == "2.1.0" and health["alerts"]["feed_freshness"] == "FRESH"
+    assert health["version"] == "2.2.0" and health["alerts"]["feed_freshness"] == "FRESH"
 
 
 def test_dashboard_cases_are_coarse_and_never_green_early(client):

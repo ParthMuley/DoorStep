@@ -34,6 +34,21 @@ MARIA_SENDER = "sim_phone_maria"
 DAVID_SENDER = "sim_phone_david"
 DAVID_CAREGIVER_SENDER = "sim_phone_david_caregiver"
 
+# One-time ASI:One link codes (contract v2.2, plan rev 4 §0.1). PUBLIC: they are in the repo,
+# acceptable only because every person is synthetic (plan §0.5.2). Reissued by /demo/reset.
+LINK_CODES = {
+    "MARIA-4821": {"role": "RESIDENT", "resident_id": "resident_001", "case_id": "case_maria_001",
+                   "display_name": "Maria (synthetic)"},
+    "DAVID-5932": {"role": "RESIDENT", "resident_id": "resident_002", "case_id": "case_david_002",
+                   "display_name": "David (synthetic)"},
+    "SARAH-7310": {"role": "VOLUNTEER", "volunteer_id": "volunteer_sarah", "org_id": "eastside_rides_demo",
+                   "display_name": "Sarah (synthetic)"},
+    "LEE-6624": {"role": "VOLUNTEER", "volunteer_id": "volunteer_lee", "org_id": "red_cross_demo",
+                 "display_name": "Lee (synthetic)"},
+    "COORD-1150": {"role": "COORDINATOR", "coordinator_id": "coordinator_demo",
+                   "display_name": "Coordinator (synthetic)"},
+}
+
 # v1 zone-graph node per seeded resident (temporary; replaced by polygon geofencing in B3).
 LEGACY_SECTORS = {"resident_001": "zone_3_sector_b", "resident_002": "zone_3_sector_a"}
 

@@ -7,7 +7,7 @@ Doorstep helps trusted community organizations get accessible transport and reco
 ## How it works
 
 **Before a disaster**
-1. Residents register: address, needs (wheelchair, transfer help, oxygen, pets…), emergency contacts and consent.
+1. Residents register (or sign up in their own ASI:One chat and link it with a one-time code): address, needs (wheelchair, transfer help, oxygen, pets…), emergency contacts and consent.
 2. Partner organizations register their volunteers **where they are**: vehicle, capacity, and which needs they can handle.
 
 **During a disaster**
@@ -19,6 +19,8 @@ Doorstep helps trusted community organizations get accessible transport and reco
 8. The **Route** agent requests an illustrative HERE route that avoids evacuation-order zones and official closures.
 9. The volunteer accepts, and only then is the resident told "help is on the way", with an ETA that is an estimate, not a guarantee.
 10. Pickup and arrival are confirmed separately. A case turns green only at confirmed arrival.
+
+    **Silence:** after 15 minutes without an answer, a volunteer counts as not available, and a resident goes to the coordinator's follow-up list. Silence never means safe.
 
 **After evacuation**
 11. With consent, the **Post-Calamity** agent refers the resident to recovery organizations (temporary housing, insurance guidance…). A referral is not completed help.
@@ -84,6 +86,8 @@ DOORSTEP_TEST_MONGODB_URI=mongodb://127.0.0.1:27017 PYTHONPATH=src python -m pyt
 
 Agents: see `docs/dev-a-notes.md` (agent seeds, Agentverse mailboxes, `scripts/run_agents.ps1`).
 
+**Public deploy (Render + MongoDB Atlas, free):** see [docs/deploy-render.md](docs/deploy-render.md). It's needed only so the route-map image has a public https address for ASI:One.
+
 ## Configuration
 
 | Variable | Default | Notes |
@@ -96,7 +100,10 @@ Agents: see `docs/dev-a-notes.md` (agent seeds, Agentverse mailboxes, `scripts/r
 | `ALERT_STALE_AFTER_SECONDS` | `900` | feed age after which zones are STALE |
 | `OUTREACH_MAX_ORGS` | `3` | nearest orgs contacted per alert |
 | `AUTO_ESCALATION_ACK` | `true` | set `false` when the Escalation agent runs |
-| `ROUTE_MAX_AVOID_AREAS` | `250` | above this, route constraints are refused (never truncated) |
+| `ROUTE_MAX_AVOID_AREAS` | `20` | HERE's polygon limit; above it, route constraints are refused (never truncated) |
+| `DOORSTEP_AGENT_TOKEN` / `ROUTE_AGENT_TOKEN` / `CALAMITY_AGENT_TOKEN` | `change-me-…` | `X-Agent-Token` for linking/registration/replies, map uploads, the deadline sweep |
+| `REPLY_DEADLINE_MINUTES` | `15` | after it a silent volunteer is NO_REPLY and a silent resident goes to the unresolved queue |
+| `PUBLIC_BASE_URL` | unset | public https base for map links (Render's `RENDER_EXTERNAL_URL` is used if unset) |
 | `ASI_ONE_API_KEY`, `HERE_API_KEY`, agent seeds | none | agents only; never committed |
 
 ## Safety and limitations
@@ -111,6 +118,7 @@ Agents: see `docs/dev-a-notes.md` (agent seeds, Agentverse mailboxes, `scripts/r
 - **Known gaps:**
   - The Spanish message templates still need review by a fluent speaker.
   - Token auth is demo gating, not production security.
+  - The seeded ASI:One link codes (`MARIA-4821`, …) are public because they're in the repo. That's fine for synthetic people only.
   - The road map and polygons are fictional.
   - A real deployment would need agreements with authorized organizations, a safety review and privacy controls.
 
@@ -120,6 +128,7 @@ Agents: see `docs/dev-a-notes.md` (agent seeds, Agentverse mailboxes, `scripts/r
 - [Interface contract v2.1](docs/interface-contract.md)
 - [Backend handoff notes](docs/dev-b-notes.md)
 - [Backend decisions](docs/decisions.md)
+- [Deploy on Render + Atlas](docs/deploy-render.md)
 - [Agent notes](docs/dev-a-notes.md)
 - [Master spec](docs/Doorstep_Implementation_Master_Spec.md)
 - [Original two-developer plan](docs/Doorstep_Two_Developer_Execution_Plan.md)

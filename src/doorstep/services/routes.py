@@ -50,7 +50,7 @@ class RouteService:
 
     @staticmethod
     def max_avoid_areas() -> int:
-        return int(os.environ.get("ROUTE_MAX_AVOID_AREAS", "250"))
+        return int(os.environ.get("ROUTE_MAX_AVOID_AREAS", "20"))  # HERE v8 accepts at most 20 polygons
 
     # ------------------------------------------------------------ geometry
     def _order_areas(self) -> list[tuple[str, Any]]:

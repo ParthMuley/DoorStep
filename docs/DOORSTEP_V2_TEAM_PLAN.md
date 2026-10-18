@@ -10,9 +10,9 @@
 - §17 explains how to get a HERE API key;
 - B's amendments (§0.5): the sender address must come from the authenticated Doorstep agent, the demo link codes are public, and a 15-minute reply deadline applies.
 
-**Revision 5 (2026-10-18, proposed by A):** self-registration in ASI:One with address geocoding (§00).
+**Revision 5 (2026-10-18, proposed by A, agreed by B):** self-registration in ASI:One with address geocoding (§00).
 
-**Revision 6 (2026-10-18, proposed by A, pending B's agreement):** what we learned running everything live in ASI:One, plus:
+**Revision 6 (2026-10-18, proposed by A, agreed by B on 2026-10-18; B's answers in §000.10):** what we learned running everything live in ASI:One, plus:
 - bulk volunteer roster import with invite codes;
 - "Your trip" snapshot cards;
 - the HERE route map image, **hosted by B**;
@@ -20,7 +20,7 @@
 
 See §000 (rev 6), §00 (rev 5), §0 (rev 4), §0.5 (amendments) and §0b (rev 3).*
 
-## 000. Revision 6 (2026-10-18, proposed by A, pending B's agreement)
+## 000. Revision 6 (2026-10-18, proposed by A, agreed by B)
 
 All of this runs on `feat/fetch-agents` against B's real app (`scripts/dev_backend_v2.py` = B's app plus A's stand-ins for routes B hasn't built yet). The 8 agents are on Agentverse mailboxes. Everything was verified live in ASI:One with synthetic people only. Commits: `1cbad8a`, `f35e2ba`, `a656ef8`, `d0e1915` and this one.
 
@@ -131,7 +131,34 @@ Every role: `LINK <code>`, `UNLINK` (demo), `register as resident` / `register a
 - Do you agree imported volunteers are approved by default because the org vouches, while self-registered ones are not?
 - Is a 24 h map expiry and a ≤ 300 KB size OK?
 
-## 00. Revision 5 (2026-10-18, proposed by A, pending B's agreement): self-registration in ASI:One
+### 000.10 B's answers and what B built (B8, 2026-10-18; contract v2.2 = `docs/interface-contract.md` §5.13)
+**Built on `feat/backend-geodata`, so A can delete the stand-ins in `fake_v2_backend.py`:**
+1. `POST /link` and `POST /unlink` (Doorstep token). The same seeded codes as A's stand-in; invite codes work too.
+2. `POST /register`: same response shape as A's stand-in. Residents are stored as `SELF-REGISTERED (demo)` with coordinates only; volunteers always start unapproved.
+3. `POST /orgs/{org}/volunteers/{vid}/approve`, plus `GET /volunteers/pending?org_id=` for the coordinator card.
+4. `POST /organizations/{org}/invites` → a one-time code (e.g. `NEIGHBOR-4821`) that `/link` accepts. No batch endpoint yet; A's per-row import works.
+5. `PUT /maps/{map_id}` (`X-Agent-Token: ROUTE_AGENT_TOKEN`, raw PNG ≤ 300 KB) and public `GET /maps/{map_id}.png` (24 h or assignment-end expiry, `noindex`).
+   - **Deploy:** Render (free) + MongoDB Atlas, see `docs/deploy-render.md`. Until it's deployed, map URLs point at the local backend.
+6. `POST /deadlines/sweep` (Doorstep **or** Calamity token: `CALAMITY_AGENT_TOKEN`). The deadline is also applied whenever a case, outreach, match or dashboard is read.
+7. **Linked ASI:One sender on resident replies:** accepted with the Doorstep token. A can stop sending `sender_for_backend` (B's `/link` doesn't return it) and send the linked address. Sim-phone senders still work during the switch.
+   - Volunteer availability takes an optional `sender` (the linked address), which B checks.
+8. **Small fixes:** `ROUTE_MAX_AVOID_AREAS` default **20**; unit tests clear all agent-token env vars; `KEYWORD_EXTRACTION` / `UNCLEAR` accepted (`d25e373`).
+   - Demo coordinates: they're fictional labels on real-world LA coordinates, which the geofence needs. Seeded street addresses are never real.
+
+**Verified:** A's `test_rev4_linking`, `test_rev5_registration` and `test_roster_import` pass with the stand-ins switched off, i.e. against B's real routes. Full suite: 268 passed.
+
+**Answers to A's questions:**
+- **Deploy:** Render + MongoDB Atlas (free), public https at `https://<service>.onrender.com`, serving `/maps`. B sets it up; tokens go to A privately.
+- **ETA:** use HERE's when there's an `ILLUSTRATIVE_ONLY` route. B already replaces its straight-line estimate with the preview's `duration_s`. **Send the first section's duration (volunteer → pickup), not the whole trip.**
+- **Drive-time ranking:** B ranks, so every matching decision stays in one tested place. B will accept optional `drive_minutes: {volunteer_id: minutes}` on `/matches/propose` and rank the *eligible* volunteers by it, falling back to distance. Eligibility never changes. Not built yet: say when you need it.
+- **Approval:** agreed. Org-imported volunteers keep the approval the org gives them (default yes); self-registered ones start unapproved.
+- **Maps:** 24 h and ≤ 300 KB are fine (`MAP_TTL_HOURS` configurable).
+
+**New env vars for `.env.example` (A's file):** `DOORSTEP_AGENT_TOKEN`, `ROUTE_AGENT_TOKEN`, `CALAMITY_AGENT_TOKEN`, `REPLY_DEADLINE_MINUTES=15`, `PUBLIC_BASE_URL` (optional), plus `NETWORK_AGENT_TOKEN` and `MONGODB_PARTNERS_DB` if still missing.
+
+**Not built (on purpose):** B-side `notify` lists for check-ins and outreach. A's Doorstep agent already composes role cards, so only the sweep returns a `notify` list.
+
+## 00. Revision 5 (2026-10-18, proposed by A, agreed by B): self-registration in ASI:One
 
 **Why:** today a person can only link to a record that already exists (seeded one-time codes). Revision 5 lets a resident or a volunteer **register themselves in their own ASI:One chat**, before a disaster, and be linked in the same step.
 

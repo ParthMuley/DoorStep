@@ -108,6 +108,8 @@ class MatchService:
                 select_site: Optional[str] = None, correlation_id: Optional[str] = None) -> tuple[dict, bool]:
         eng = self.engine
         case = self.store.get_case(case_id)
+        eng.deadlines.apply()  # volunteers past their reply deadline count as NO_REPLY
+        case = self.store.get_case(case_id)
         corr = eng._corr(case, correlation_id)
         key = idempotency_key or f"{case_id}:match:v1"
         if create_proposal:

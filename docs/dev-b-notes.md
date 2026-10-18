@@ -58,7 +58,14 @@ Responses carry `schema_version: "2.0"`.
     - The network agent answers for the recovery org: `POST /recovery/{referral_id}/respond {org_id, decision: ACCEPTED|DECLINED|COMPLETED, evidence?}` (network token). COMPLETED needs `{"type":"SIMULATED_SERVICE_CONFIRMED","reference"}`. DECLINED returns `next_alternate`.
     - `GET /cases/{id}` shows a `recovery` block with `status`, `referrals` and `housing_secured`.
 
-**Card data (B7):** `GET /dashboard/summary` (counts, unresolved queue, alerts, outreach, closures, recovery), `GET /dashboard/cases` (coarse locations + progress), and `progress_steps` on `GET /cases/{id}`. `GET /health` reports version 2.1.0 and feed freshness.
+**Card data (B7):** `GET /dashboard/summary` (counts, unresolved queue, alerts, outreach, closures, recovery), `GET /dashboard/cases` (coarse locations + progress), and `progress_steps` on `GET /cases/{id}`. `GET /health` reports version 2.2.0 and feed freshness.
+
+**B8 (contract v2.2, contract §5.13):**
+- **Files:** `services/links.py` (link, unlink, register, invites, approve, pending), `services/deadlines.py` (15-minute reply deadline, one clock `deadlines.now`), `services/maps.py` (hosted route PNGs).
+- **Agent tokens:** `api/security.py` `require_agent(...)`, one `X-Agent-Token` per agent role.
+- **Sender check:** `engine._linked_sender`.
+- **Deploy:** `render.yaml` + `docs/deploy-render.md`.
+- **Tests:** `tests/unit/test_links_deadlines_maps.py`; A's rev 4/5/roster tests also pass against the real routes with the stand-ins off.
 
 **v1 routes:** still mounted for A's old test (`tests/integration/test_fetch_backend_client.py`) and `workflows/backend_client.py`. A's agents no longer call any v1-only endpoint (they use `GET /cases/{id}` and the v2 routes). Remove them in one PR together with A's v1 client and test (plan §6.2).
 

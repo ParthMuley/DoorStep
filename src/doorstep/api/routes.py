@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import JSONResponse, Response
 
 from doorstep.models import SCHEMA_VERSION
 from doorstep.services.engine import DoorstepService
 
 from . import schemas as s
-from .security import correlation_header, require_agent_token, require_demo_token
+from .security import correlation_header, is_agent, require_agent, require_agent_token, require_demo_token
 
 router = APIRouter()
 write = APIRouter(dependencies=[Depends(require_demo_token)])
@@ -42,7 +42,7 @@ def pick(header: Optional[str], body: Optional[s.Body]) -> Optional[str]:
 @router.get("/health")
 def health(service: DoorstepService = Depends(svc)):
     feeds = list(service.db.coll("feeds").find({}))
-    return out({"status": "ok", "version": "2.1.0", "simulation_mode": True, "databases": service.db.ping(),
+    return out({"status": "ok", "version": "2.2.0", "simulation_mode": True, "databases": service.db.ping(),
                 "alerts": {"feed_freshness": service.alerts.simulated_freshness(),
                            "last_ingest_at": max((f.get("last_ingest_at") or "" for f in feeds), default=None) or None}})
 
@@ -187,6 +187,11 @@ def add_site(region_id: str, org_id: str, body: s.SiteBody, corr: Optional[str] 
 @write.post("/alerts/{alert_id}/volunteers/{volunteer_id}/availability", dependencies=[Depends(require_agent_token)])
 def record_availability(alert_id: str, volunteer_id: str, body: s.AvailabilityBody,
                         corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
+    if body.sender is not None:  # v2.2: if relayed from ASI:One, it must be this volunteer's linked account
+        link = service.links.by_address(body.sender)
+        if not link or link["role"] != "VOLUNTEER" or link["person_id"] != volunteer_id:
+            return out({"error": "UNAUTHORIZED", "detail": "Sender is not the ASI:One account linked to this volunteer",
+                        "reasons": ["UNKNOWN_SENDER"], "correlation_id": pick(corr, body)}, 403, V2)
     return out(service.registry.record_availability(
         alert_id, volunteer_id, org_id=body.org_id, available=body.available, responded_at=body.responded_at,
         idempotency_key=body.idempotency_key, correlation_id=pick(corr, body) or ""), version=V2)
@@ -200,10 +205,12 @@ def register_agent(role: str, body: s.AgentAddressBody, service: DoorstepService
 
 @write.post("/cases/{case_id}/responses")
 def submit_resident_response(case_id: str, body: s.ResponseBody, corr: Optional[str] = Depends(correlation_header),
+                             x_agent_token: Optional[str] = Header(default=None),
                              service: DoorstepService = Depends(svc)):
     return out(service.submit_resident_response(
         case_id, body.text, body.language, sender=body.sender,
-        external_id=body.external_id or body.idempotency_key, correlation_id=pick(corr, body)))
+        external_id=body.external_id or body.idempotency_key, correlation_id=pick(corr, body),
+        via_doorstep_agent=is_agent("DOORSTEP", x_agent_token)))
 
 
 @write.post("/cases/{case_id}/transport/evaluate")
@@ -420,6 +427,69 @@ def sim_no_reply(case_id: str, service: DoorstepService = Depends(svc)):
 @write.post("/sim/escalation-ack")
 def sim_escalation_ack(body: s.EscalationAckBody, service: DoorstepService = Depends(svc)):
     return out(service.set_escalation_ack(body.acknowledge))
+
+
+
+# ---- contract v2.2: ASI:One linking, registration, invites, approval, deadlines, maps ----
+DOORSTEP_ONLY = [Depends(require_agent("DOORSTEP"))]
+
+
+@write.post("/link", dependencies=DOORSTEP_ONLY)
+def link_account(body: s.LinkBody, corr: Optional[str] = Depends(correlation_header),
+                 service: DoorstepService = Depends(svc)):
+    return out(service.links.link(body.code, body.asi_one_address, pick(corr, body) or ""), version=V2)
+
+
+@write.post("/unlink", dependencies=DOORSTEP_ONLY)
+def unlink_account(body: s.UnlinkBody, corr: Optional[str] = Depends(correlation_header),
+                   service: DoorstepService = Depends(svc)):
+    return out(service.links.unlink(body.asi_one_address, pick(corr, body) or ""), version=V2)
+
+
+@write.post("/register", dependencies=DOORSTEP_ONLY)
+def register_and_link(body: s.RegisterBody, corr: Optional[str] = Depends(correlation_header),
+                      service: DoorstepService = Depends(svc)):
+    return out(service.links.register(body.role, body.asi_one_address, body.profile, body.org_id,
+                                      pick(corr, body) or ""), 201, V2)
+
+
+@write.post("/organizations/{org_id}/invites")
+def issue_invite(org_id: str, body: s.InviteBody, corr: Optional[str] = Depends(correlation_header),
+                 service: DoorstepService = Depends(svc)):
+    return out(service.links.invite(org_id, body.volunteer_id, body.display_name, pick(corr, body) or ""), 201, V2)
+
+
+@write.post("/orgs/{org_id}/volunteers/{volunteer_id}/approve")
+def approve_volunteer(org_id: str, volunteer_id: str, body: Optional[s.ApproveBody] = None,
+                      corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
+    approved = True if body is None else body.approved
+    return out(service.links.approve_volunteer(org_id, volunteer_id, approved, pick(corr, body) or ""), version=V2)
+
+
+@router.get("/volunteers/pending")
+def pending_volunteers(org_id: Optional[str] = None, service: DoorstepService = Depends(svc)):
+    return out({"volunteers": service.links.pending_volunteers(org_id)}, version=V2)
+
+
+@write.post("/deadlines/sweep", dependencies=[Depends(require_agent("DOORSTEP", "CALAMITY"))])
+def deadline_sweep(body: Optional[s.SweepBody] = None, corr: Optional[str] = Depends(correlation_header),
+                   service: DoorstepService = Depends(svc)):
+    return out(service.deadlines.sweep(pick(corr, body) or ""), version=V2)
+
+
+@router.put("/maps/{map_id}", dependencies=[Depends(require_agent("ROUTE"))])
+async def put_map(map_id: str, request: Request, assignment_id: Optional[str] = None,
+                  service: DoorstepService = Depends(svc)):
+    if request.headers.get("content-type", "").split(";")[0].strip() != "image/png":
+        return out({"error": "VALIDATION_ERROR", "detail": "Content-Type must be image/png", "reasons": []}, 415, V2)
+    data = await request.body()
+    return out(service.maps.put(map_id, data, assignment_id=assignment_id, base_url=str(request.base_url)), 201, V2)
+
+
+@router.get("/maps/{map_id}.png")
+def get_map(map_id: str, service: DoorstepService = Depends(svc)):
+    return Response(content=service.maps.get(map_id), media_type="image/png",
+                    headers={"Cache-Control": "private, max-age=3600", "X-Robots-Tag": "noindex"})
 
 
 router.include_router(write)

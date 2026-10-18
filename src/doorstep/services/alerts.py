@@ -35,7 +35,7 @@ from doorstep.models import (
     utc_now_iso,
 )
 
-from . import geo, intake, templates
+from . import deadlines, geo, intake, templates
 from .alert_feed import SyntheticFeed
 from .errors import Conflict, FeedInvalid, NotFound
 
@@ -400,6 +400,7 @@ class AlertService:
                                      "zone_status": a.status})
             msg = eng._message_resident(case, "checkin")
             eng._set_comm_status(case, C.SENT, reason="simulated check-in sent")
+            case.reply_by = deadlines.reply_by()  # also when re-sent for a new alert
             case.next_step = "Awaiting resident reply. Silence is not evidence of danger or safety."
             eng._save_case(case)
         return msg.message_id
@@ -546,11 +547,14 @@ class AlertService:
                                 for v in entry.volunteers if not v.approved]
                     ids = {v.volunteer_id for v in targets}
 
-                    def fn(r, ids=ids, org_id=rec["org_id"]):
+                    asked_at, due = deadlines.iso(deadlines.now()), deadlines.reply_by()
+
+                    def fn(r, ids=ids, org_id=rec["org_id"], asked_at=asked_at, due=due):
                         e = next(o for o in r.orgs if o.org_id == org_id)
                         for v in e.volunteers:
                             if v.volunteer_id in ids:
-                                v.availability = VolunteerAvailability(alert_id=alert_id, state=AvailabilityState.ASKED)
+                                v.availability = VolunteerAvailability(alert_id=alert_id, state=AvailabilityState.ASKED,
+                                                                       asked_at=asked_at, reply_by=due)
                         return bool(ids), None
                     partners.mutate_region(region_id, fn)
                     for v in targets:
@@ -610,6 +614,7 @@ class AlertService:
     def outreach_summary(self, alert_id: str) -> dict[str, Any]:
         """Live per-org counts for an alert (updates as answers arrive)."""
         alert = self.get_alert(alert_id)
+        self.engine.deadlines.apply()
         geom = geo.polygon(alert.geometry)
         orgs: dict[str, dict[str, Any]] = {}
         for region in self.store.partners.list_regions():

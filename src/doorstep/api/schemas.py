@@ -55,6 +55,7 @@ class AvailabilityBody(Body):
     available: bool
     responded_at: Optional[str] = None
     idempotency_key: Optional[str] = None
+    sender: Optional[str] = None  # v2.2: the volunteer's linked ASI:One address, if the answer came from ASI:One
 
 
 class AgentAddressBody(Body):
@@ -267,3 +268,33 @@ class EscalationAckBodyV2(Body):
     status: Literal["ACKNOWLEDGED_REQUEST_ONLY", "NO_ACKNOWLEDGMENT"]
     recipient_agent_address: Optional[str] = None
     idempotency_key: Optional[str] = None
+
+
+# ---- contract v2.2: ASI:One linking, registration, invites, approval, deadlines (plan rev 4-6)
+class LinkBody(Body):
+    code: str
+    asi_one_address: str
+
+
+class UnlinkBody(Body):
+    asi_one_address: str
+
+
+class RegisterBody(Body):
+    role: Literal["RESIDENT", "VOLUNTEER"]
+    asi_one_address: str
+    profile: dict[str, Any]
+    org_id: Optional[str] = None
+
+
+class InviteBody(Body):
+    volunteer_id: str
+    display_name: Optional[str] = None
+
+
+class ApproveBody(Body):
+    approved: bool = True
+
+
+class SweepBody(Body):
+    pass

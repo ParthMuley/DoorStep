@@ -160,6 +160,8 @@ class VolunteerAvailability(DoorstepModel):
     alert_id: str
     state: AvailabilityState
     responded_at: Optional[str] = None
+    asked_at: Optional[str] = None
+    reply_by: Optional[str] = None  # asked_at + REPLY_DEADLINE_MINUTES; after it ASKED becomes NO_REPLY
 
 
 class Volunteer(DoorstepModel):

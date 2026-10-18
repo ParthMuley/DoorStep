@@ -1,9 +1,9 @@
-# Doorstep Interface Contract — v2.1 (plan revision 3)
+# Doorstep Interface Contract — v2.2 (plan revisions 3–6)
 
 Shared between Developer A (Fetch.ai agents, ASI:One, cards, LangGraph) and Developer B (backend, MongoDB, geography, matching).
 **Owner: Developer B** (`docs/DOORSTEP_V2_TEAM_PLAN.md` §6). Source: that plan (revision 3) §0–§7, plus the safety rules in `Doorstep_V2_Two_Person_Claude_Code_Plan.md` and `Doorstep_Implementation_Master_Spec.md`. If anything here conflicts with a safety rule, the safety rule wins.
 
-**Status:** v2.1 proposed for plan revision 3 (one Volunteer Network agent; location-first `regions` partner DB). Frozen once A signs off (checkpoint C1). After that, any change bumps `schema_version` (2.2…), goes in a small PR touching only this file, and needs both developers to approve. §11 answers A's review items 1–5. **What changed from v2.0 is in §8.**
+**Status:** v2.1 proposed for plan revision 3 (one Volunteer Network agent; location-first `regions` partner DB). Frozen once A signs off (checkpoint C1). After that, any change bumps `schema_version` (2.2…), goes in a small PR touching only this file, and needs both developers to approve. §11 answers A's review items 1–5. **What changed from v2.0 is in §8; v2.2 (ASI:One linking, self-registration, invites, approval, the 15-minute deadline, hosted maps) is §5.13 and §8c.**
 
 **Everything is synthetic.** Residents, organizations, volunteers, addresses and phone numbers are fictional. All resident- and volunteer-facing text starts with `DOORSTEP DEMO`. Every card shows SIMULATION. Real-world data (live Cal OES feed, real news) is **display-only**: it never triggers check-ins or outreach, never blocks roads, never changes a case.
 
@@ -542,6 +542,35 @@ Refused → 409 `ROUTE_REFUSED`, `reasons` ∈ `ORDER_ZONE` (a stop is inside an
 - `POST /sim/outreach/{alert_id}/deadline`.
 - `GET /sim/messages?case_id=&volunteer_id=`.
 
+### 5.13 v2.2: ASI:One accounts, deadlines and maps (plan rev 4 §0.4–0.5, rev 5 §00, rev 6 §000)
+
+**Agent tokens** (`X-Agent-Token`, one per role; defaults are placeholders, real values only in `.env` / Render): `DOORSTEP_AGENT_TOKEN`, `ROUTE_AGENT_TOKEN`, `CALAMITY_AGENT_TOKEN`, `NETWORK_AGENT_TOKEN`. A missing or wrong token gets **401**. Routes under the demo token still also need `Authorization: Bearer`.
+
+| Path | Auth | Body → response |
+|---|---|---|
+| `POST /link` | Bearer + Doorstep token | `{code, asi_one_address}` → `{role, display_name, asi_one_address, linked_at}` + `resident_id, case_id` / `volunteer_id, org_id` / `coordinator_id`. 409 `UNKNOWN_CODE`, `CODE_SPENT` (works once, even from the same address), `ADDRESS_ALREADY_LINKED`, `PERSON_ALREADY_LINKED`. |
+| `POST /unlink` | Bearer + Doorstep token | `{asi_one_address}` → `{unlinked: true, role}`; 404 if not linked. The code stays spent (`/demo/reset` reissues demo codes). |
+| `POST /register` | Bearer + Doorstep token | `{role: RESIDENT\|VOLUNTEER, asi_one_address, profile, org_id?}` → 201, same shape as `/link`. Resident: `ResidentProfile` fields (`phone` optional), stored with address label `SELF-REGISTERED (demo)` (coordinates only), plus `zone_status`. Volunteer: `Volunteer` fields with `location` (GeoJSON Point); the region is found from the location (409 `NO_REGION`); always `approved: false` until the org approves; returns `region_id`. |
+| `POST /organizations/{org_id}/invites` | Bearer | `{volunteer_id, display_name?}` → 201 `{code, role: VOLUNTEER, volunteer_id, org_id, display_name}` (e.g. `NEIGHBOR-4821`), one-time, accepted by `/link`. 409 `WRONG_ORG`. |
+| `POST /orgs/{org_id}/volunteers/{volunteer_id}/approve` | Bearer (coordinator) | `{approved: true}` (optional body) → `{approved, changed}`. 409 `WRONG_ORG`. |
+| `GET /volunteers/pending?org_id=` | none | volunteers with `approved: false` (`linked` flag, no contact details). |
+| `POST /deadlines/sweep` | Bearer + Doorstep or Calamity token | → `{checked_at, deadline_minutes, cases_no_reply, volunteers_no_reply, notify:[{role: COORDINATOR, channel: ASI_ONE, template_id: deadline_summary, text, case_ids}]}`. |
+| `PUT /maps/{map_id}` | Route token (no Bearer needed) | raw `image/png` body ≤ 300 KB, `map_id` 24–64 url-safe chars, optional `?assignment_id=` → 201 `{url, expires_at, bytes}`. 415 wrong Content-Type; 409 `IMAGE_TOO_LARGE` / `VALIDATION_ERROR`. |
+| `GET /maps/{map_id}.png` | **public** | the PNG, `Cache-Control: private, max-age=3600`, `X-Robots-Tag: noindex`. 404 after `MAP_TTL_HOURS` (24) or once the linked assignment is completed, canceled, declined or unresolved. No listing endpoint. |
+
+**Sender check (plan §0.5.1):**
+- `POST /cases/{id}/responses` with the Doorstep token accepts `sender` = the resident's **linked ASI:One address** and treats it as the resident's own contact. A linked address of anyone else → 403 `UNKNOWN_SENDER`. A linked address **without** the Doorstep token → 401 `DOORSTEP_AGENT_TOKEN_REQUIRED`. Senders that aren't ASI:One links (sim phones) keep the v1 contact check.
+- `POST /alerts/{id}/volunteers/{vid}/availability` takes an optional `sender`; if present it must be that volunteer's linked address (403 otherwise).
+
+**15-minute reply deadline (plan §0.5.3, `REPLY_DEADLINE_MINUTES`):**
+- `GET /cases/{id}` gains `reply_by`; volunteer availability gains `asked_at`, `reply_by`.
+- After `reply_by`: a resident still `SENT`/`DELIVERED` → `NO_REPLY_AFTER_DEADLINE`, `unresolved: true`, dashboard reason `NO_REPLY_AFTER_DEADLINE` (never safe, never "no help needed"); a volunteer still `ASKED` → `NO_REPLY` (matching reason code `NO_REPLY`, i.e. not available).
+- Applied on reads (`GET /cases/{id}`, `GET /alerts/{id}/outreach`, `/matches/propose`, `/dashboard/*`) and by `/deadlines/sweep`. Late answers still count. No automatic SMS fallback.
+
+**Contact on case views:** `contact: {channel: ASI_ONE|SIM, linked, linked_at}` and `reachability: LINKED_ASI_ONE | SIM_ONLY | NOT_REACHABLE`. GET views never return the ASI:One address.
+
+**Known limitation (plan §0.5.2):** the seeded demo codes (`MARIA-4821`, `DAVID-5932`, `SARAH-7310`, `LEE-6624`, `COORD-1150`) are public because they are in the repo. That's acceptable only because every person is synthetic. A real deployment would issue codes through the partner org and expire them.
+
 ## 6. Fetch.ai agent messages (A owns `integrations/fetch_messages.py`; listed so both sides align)
 
 All carry `schema_version, correlation_id, created_at`, plus `case_id` / `alert_id` / `idempotency_key` where relevant. Agents receive only consent-scoped fields (`shared_with_volunteer`, `shared_payload`, `case_summary_for_recipient`).
@@ -579,6 +608,13 @@ All carry `schema_version, correlation_id, created_at`, plus `case_id` / `alert_
 | `USE_LLM_INTENT` | A, B | `false` |
 | `ASI_ONE_API_KEY`, `HERE_API_KEY` | A (B for extraction) | never committed |
 | `NEWS_POLL_INTERVAL_SECONDS` | A (News) | `120` |
+| `DOORSTEP_AGENT_TOKEN` | A (Doorstep), B | `change-me-doorstep-agent-token` |
+| `ROUTE_AGENT_TOKEN` | A (Route), B | `change-me-route-agent-token` |
+| `CALAMITY_AGENT_TOKEN` | A (Calamity), B | `change-me-calamity-agent-token` |
+| `REPLY_DEADLINE_MINUTES` | B | `15` |
+| `MAP_TTL_HOURS` | B | `24` |
+| `PUBLIC_BASE_URL` | B | unset; falls back to Render's `RENDER_EXTERNAL_URL`, then the request URL |
+| `ROUTE_MAX_AVOID_AREAS` | B | `20` (HERE v8's polygon limit; was 250) |
 
 ## 8. Changes from v2.0 to v2.1 (plan revision 3)
 
@@ -593,6 +629,13 @@ All carry `schema_version, correlation_id, created_at`, plus `case_id` / `alert_
 | `outreach_orgs[].agent_address`, `match.org_agent_address`, `shelter_agent_address` | `network_agent_address` + `region_ids` / `region_id` |
 | volunteer `address {label,lat,lon}` | volunteer `location` GeoJSON Point (`2dsphere`) |
 | — | `GET /regions/near`, `PUT /agents/{role}`, `GET /agents`, resident pickup SMS |
+
+## 8c. Changes from v2.1 to v2.2 (plan revisions 4–6)
+- New: `/link`, `/unlink`, `/register`, org invites, volunteer approval, `/volunteers/pending`, `/deadlines/sweep`, `/maps` (§5.13).
+- Case view: `contact`, `reachability`, `reply_by`. Availability: `asked_at`, `reply_by`, optional `sender`.
+- `/closures/ingest` accepts `KEYWORD_EXTRACTION` and `UNCLEAR` (§5.9).
+- `ROUTE_MAX_AVOID_AREAS` default 250 → 20.
+- Not built: B-side `notify` lists for check-ins and outreach. A's Doorstep agent composes its own role cards, so only the sweep returns a `notify` list. Add more if A needs them.
 
 ## 8b. Migration from v1.0
 

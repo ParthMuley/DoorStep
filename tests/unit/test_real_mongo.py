@@ -85,3 +85,33 @@ def test_alert_ingest_and_outreach_on_real_mongodb():
     finally:
         real.drop_database(users)
         real.drop_database(orgs)
+
+
+def test_links_and_maps_on_real_mongodb(monkeypatch):
+    """Contract v2.2 on a real server: atomic code spend, binary PNG round trip."""
+    from fastapi.testclient import TestClient
+    from pymongo import MongoClient
+
+    from doorstep.api import app as app_module
+    from doorstep.services.db import Database
+
+    suffix = uuid.uuid4().hex[:8]
+    users, orgs = f"doorstep_users_test_{suffix}", f"doorstep_orgs_test_{suffix}"
+    real = MongoClient(URI, serverSelectionTimeoutMS=5000)
+    monkeypatch.setattr(app_module, "Database", lambda _path=None: Database(client=real, users_db=users, orgs_db=orgs))
+    try:
+        client = TestClient(app_module.create_app(seed=True),
+                            headers={"Authorization": "Bearer change-me-local-demo-token"})
+        doorstep = {"X-Agent-Token": "change-me-doorstep-agent-token"}
+        first = client.post("/link", headers=doorstep, json={"code": "MARIA-4821", "asi_one_address": "user1qm"})
+        assert first.status_code == 200, first.text
+        again = client.post("/link", headers=doorstep, json={"code": "MARIA-4821", "asi_one_address": "user1qz"})
+        assert again.json()["error"] == "CODE_SPENT"
+        png = b"\x89PNG\r\n\x1a\n" + bytes(range(256)) * 4
+        put = client.put("/maps/" + "m" * 30, content=png,
+                         headers={"X-Agent-Token": "change-me-route-agent-token", "Content-Type": "image/png"})
+        assert put.status_code == 201, put.text
+        assert client.get("/maps/" + "m" * 30 + ".png").content == png
+    finally:
+        real.drop_database(users)
+        real.drop_database(orgs)

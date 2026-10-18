@@ -1,0 +1,37 @@
+# Render Blueprint for the Doorstep backend (DOORSTEP DEMO, synthetic data only).
+# Owner: Developer B. Setup steps: docs/deploy-render.md
+services:
+  - type: web
+    name: doorstep-backend
+    runtime: python
+    plan: free                      # sleeps after ~15 idle min; first request then takes ~30 s
+    buildCommand: pip install .
+    startCommand: uvicorn doorstep.api.app:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.7"
+      - key: SIMULATION_MODE
+        value: "true"
+      - key: MONGODB_URI              # MongoDB Atlas connection string; paste it in the Render dashboard
+        sync: false
+      - key: MONGODB_USERS_DB
+        value: doorstep_users
+      - key: MONGODB_PARTNERS_DB
+        value: doorstep_partners
+      # Agent and demo tokens: Render generates random values; copy them into the agents' .env.
+      - key: DEMO_AUTH_TOKEN
+        generateValue: true
+      - key: NETWORK_AGENT_TOKEN
+        generateValue: true
+      - key: DOORSTEP_AGENT_TOKEN
+        generateValue: true
+      - key: ROUTE_AGENT_TOKEN
+        generateValue: true
+      - key: CALAMITY_AGENT_TOKEN
+        generateValue: true
+      - key: REPLY_DEADLINE_MINUTES
+        value: "15"
+      - key: AUTO_ESCALATION_ACK
+        value: "false"                # the Escalation agent acknowledges
+      # PUBLIC_BASE_URL is optional: Render sets RENDER_EXTERNAL_URL, which map links use.

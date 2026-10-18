@@ -38,3 +38,35 @@ def require_agent_token(x_agent_token: str | None = Header(default=None)) -> Non
     """Network-acting routes (contract v2.1 §1): only the Volunteer Network agent holds this token."""
     if not x_agent_token or not hmac.compare_digest(x_agent_token, network_token()):
         raise HTTPException(status_code=403, detail="Missing or invalid X-Agent-Token")
+
+
+# Contract v2.2 (plan rev 4 §0.5): one token per agent role. Never commit real values.
+AGENT_TOKEN_DEFAULTS = {
+    "DOORSTEP": ("DOORSTEP_AGENT_TOKEN", "change-me-doorstep-agent-token"),
+    "ROUTE": ("ROUTE_AGENT_TOKEN", "change-me-route-agent-token"),
+    "CALAMITY": ("CALAMITY_AGENT_TOKEN", "change-me-calamity-agent-token"),
+    "NETWORK": ("NETWORK_AGENT_TOKEN", DEFAULT_NETWORK_TOKEN),
+}
+
+
+def agent_token(role: str) -> str:
+    env, default = AGENT_TOKEN_DEFAULTS[role]
+    return os.environ.get(env) or default
+
+
+def is_agent(role: str, presented: str | None) -> bool:
+    return bool(presented) and hmac.compare_digest(presented, agent_token(role))
+
+
+def agent_role(presented: str | None) -> str | None:
+    """Which agent presented this X-Agent-Token (None if none or unknown)."""
+    return next((r for r in AGENT_TOKEN_DEFAULTS if is_agent(r, presented)), None)
+
+
+def require_agent(*roles: str):
+    def dep(x_agent_token: str | None = Header(default=None)) -> str:
+        role = agent_role(x_agent_token)
+        if role not in roles:
+            raise HTTPException(status_code=401, detail=f"Missing or invalid X-Agent-Token ({'/'.join(roles)} agent)")
+        return role
+    return dep

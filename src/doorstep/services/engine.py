@@ -54,6 +54,7 @@ from .errors import (
     InvalidTransition,
     NotFound,
     SafetyRejection,
+    Unauthenticated,
     Unauthorized,
     safety_code,
 )
@@ -65,6 +66,10 @@ from .recovery_v2 import RecoveryService
 from .closures import ClosureService
 from .routes import RouteService
 from .dashboard import DashboardService
+from . import deadlines
+from .deadlines import DeadlineService
+from .links import LinkService
+from .maps import MapService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -98,6 +103,9 @@ class DoorstepService:
         self.closures = ClosureService(self)
         self.routes = RouteService(self)
         self.dashboard = DashboardService(self)
+        self.links = LinkService(self)
+        self.deadlines = DeadlineService(self)
+        self.maps = MapService(self)
         self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
@@ -116,6 +124,7 @@ class DoorstepService:
                 self.store.save_registration(p)
             self.db.set_setting("escalation_ack", "true")
             self.closures.seed_feeds()
+            self.links.seed_codes()
             self.events.append("DEMO_RESET", case_id=None, data={"simulated": True})
         regions = seed.regions()
         return {"status": "reset", "residents": len(seed.residents()), "organizations": len(seed.organizations()),
@@ -158,6 +167,8 @@ class DoorstepService:
             return
         check_communication_transition(current, target)
         case.communication_status = target
+        if target == C.SENT:
+            case.reply_by = deadlines.reply_by()  # plan rev 4 §0.5.3
         self.events.append(
             "COMMUNICATION_STATUS_CHANGED", case_id=case.case_id,
             correlation_id=correlation_id or case.correlation_id, dimension="communication",
@@ -268,9 +279,10 @@ class DoorstepService:
     # ============================================ submit_resident_response
     def submit_resident_response(self, case_id: str, text: str, language: Optional[str] = None, *,
                                  sender: str, external_id: Optional[str] = None,
-                                 correlation_id: Optional[str] = None) -> dict[str, Any]:
+                                 correlation_id: Optional[str] = None, via_doorstep_agent: bool = False) -> dict[str, Any]:
         case = self.store.get_case(case_id)
         resident = self.store.get_resident(case.resident_id)
+        sender = self._linked_sender(case, resident, sender, via_doorstep_agent)
         allowed = {resident.contact_channel}
         if resident.caregiver:
             allowed.add(resident.caregiver.contact_channel)
@@ -1028,6 +1040,24 @@ class DoorstepService:
             self._save_case(case)
         return {"message": msg.model_dump(), "communication_status": case.communication_status}
 
+    def _linked_sender(self, case: Case, resident, sender: str, via_doorstep_agent: bool) -> str:
+        """Contract v2.2 (plan §0.5.1): an ASI:One sender is accepted only from the Doorstep agent
+        (token checked by the API) and only if it is the address linked to this case's resident.
+        It is then treated as the resident's own contact for the rest of the rules."""
+        link = self.links.by_address(sender)
+        if link is None:
+            return sender  # not an ASI:One link: the normal contact check below applies (sim phone etc.)
+        if via_doorstep_agent:
+            if link["role"] == "RESIDENT" and link["person_id"] == case.resident_id:
+                return resident.contact_channel
+            self.events.append("UNKNOWN_SENDER_REJECTED", case_id=None,
+                               data={"target_case_id": case.case_id, "sender_known": True, "via": "ASI_ONE"})
+            raise Unauthorized("Sender is not the ASI:One account linked to this case", reasons=["UNKNOWN_SENDER"])
+        if link:  # a linked ASI:One address must come through the Doorstep agent
+            raise Unauthenticated("ASI:One senders are accepted only from the Doorstep agent",
+                                  reasons=["DOORSTEP_AGENT_TOKEN_REQUIRED"])
+        return sender
+
     def mark_no_reply_deadline(self, case_id: str) -> dict[str, Any]:
         case = self.store.get_case(case_id)
         with self.db.tx():
@@ -1046,6 +1076,8 @@ class DoorstepService:
 
     # ====================================================== get_case_status
     def get_case_status(self, case_id: str, correlation_id: Optional[str] = None) -> dict[str, Any]:
+        self.store.get_case(case_id)  # 404 before any side effect
+        self.deadlines.apply()  # the 15-minute reply deadline holds even if no agent swept
         case = self.store.get_case(case_id)
         resident = self.store.get_resident(case.resident_id)
         corr = self._corr(case, correlation_id)
@@ -1061,7 +1093,9 @@ class DoorstepService:
         replay_ok = (self.events.replay_resident_status(case_id) == case.resident_status
                      and self.events.replay_communication_status(case_id) == case.communication_status)
         unresolved = case.resident_status == R.REQUIRES_COORDINATOR or (
-            case.resident_status != R.ARRIVAL_CONFIRMED and any(r.status == S.UNRESOLVED for r in requests))
+            case.resident_status != R.ARRIVAL_CONFIRMED and any(r.status == S.UNRESOLVED for r in requests)) or (
+            # no reply by the deadline: coordinator follows up (silence is never safety)
+            case.resident_status != R.ARRIVAL_CONFIRMED and case.communication_status == C.NO_REPLY_AFTER_DEADLINE)
         view = {
             "case_id": case.case_id,
             "resident_id": case.resident_id,
@@ -1092,6 +1126,9 @@ class DoorstepService:
             "recovery": self.recovery.case_view(case.case_id),
             "route": self.routes.latest_for_case(case.case_id),
             "progress_steps": self.dashboard.progress_steps(case.case_id),
+            "contact": self.links.contact("RESIDENT", case.resident_id),
+            "reachability": self.links.reachability("RESIDENT", case.resident_id, resident.contact_channel),
+            "reply_by": case.reply_by,
             "alert_id": case.alert_id,
             "sector_id": case.sector_id,
             "needs": case.needs.model_dump(),
