@@ -515,9 +515,20 @@ Refused → 409 `ROUTE_REFUSED`, `reasons` ∈ `ORDER_ZONE` (a stop is inside an
 - Never described as safe. Directions go to the volunteer's org agent only.
 
 ### 5.11 Card data
-- **`GET /dashboard/summary`** → `{"counts_by_status":[{"status","count","color","label"}],"unresolved":[{"case_id","display_name","reason","next_step"}],"alerts":{"active_order","active_warning","feed_freshness","last_ingest_at"},"outreach":{"orgs_contacted","volunteers_available","volunteers_no_reply"},"closures":{"official_confirmed","unverified","conflicting"},"generated_at","simulated":true}`
-- **`GET /dashboard/cases`** → `{"cases":[{"case_id","display_name","zone_status","resident_status","map","coarse_location":{"lat":34.10,"lon":-118.10},"unresolved","updated_at"}]}`. Coordinates are rounded to 2 decimals.
-- Plus `GET /alerts/active`, `GET /alerts/{id}/outreach`, `GET /organizations`, `GET /closures`, `GET /cases/{id}`.
+- **`GET /dashboard/summary`** →
+```json
+{"counts_by_status":[{"status":"NEEDS_ASSISTANCE","count":1,"color":"red","label":"Assistance needed"}, …all 6 statuses…],
+ "unresolved":[{"case_id","display_name","reason","zone_status","next_step"}],
+ "alerts":{"active_order","active_warning","active_shelter_in_place","feed_freshness","last_ingest_at"},
+ "outreach":{"orgs_contacted","volunteers_asked","volunteers_available","volunteers_awaiting","volunteers_no_reply"},
+ "closures":{"official_confirmed","unverified","conflicting","display_only"},
+ "recovery":{"requested","accepted","completed","unresolved"},"generated_at","simulated":true}
+```
+  `unresolved[].reason` is the latest escalation reason, or the case status if it was never escalated.
+- **`GET /dashboard/cases`** → `{"cases":[{"case_id","display_name","zone_status","resident_status","map","coarse_location":{"lat":34.10,"lon":-118.10},"unresolved","progress_steps","updated_at"}]}`. Coordinates are rounded to 2 decimals (none for an uncertain geocode); never pickup points, phones or addresses.
+- **`progress_steps`** (also on `GET /cases/{id}`): `REQUESTED → PROVIDER_ACCEPTED → PICKUP_CONFIRMED → ARRIVAL_CONFIRMED`, each `{step, done, at, evidence_ref?}`. A step is done only if a timeline event recorded it, the case's current status is at or past it (a canceled volunteer un-does "accepted"), and every earlier step is done. Green is never shown early.
+- **`GET /health`** → `{"status","version":"2.1.0","simulation_mode","databases":{"users","partners"},"alerts":{"feed_freshness","last_ingest_at"}}`.
+- Plus `GET /alerts/active`, `GET /alerts/{id}/outreach`, `GET /regions/near`, `GET /organizations`, `GET /closures`, `GET /cases/{id}`.
 
 ### 5.12 Simulator hooks (B; tests and demo)
 - `POST /sim/inbound {sender, text, external_id?, language?}`: routes by sender to a resident (case reply) **or a volunteer** (availability for the current alert). Unknown sender → 403.

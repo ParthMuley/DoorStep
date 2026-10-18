@@ -64,6 +64,7 @@ from .matching_v2 import MatchService
 from .recovery_v2 import RecoveryService
 from .closures import ClosureService
 from .routes import RouteService
+from .dashboard import DashboardService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -96,6 +97,7 @@ class DoorstepService:
         self.recovery = RecoveryService(self)
         self.closures = ClosureService(self)
         self.routes = RouteService(self)
+        self.dashboard = DashboardService(self)
         self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
@@ -1089,6 +1091,7 @@ class DoorstepService:
             **self._zone_view(case.resident_id),
             "recovery": self.recovery.case_view(case.case_id),
             "route": self.routes.latest_for_case(case.case_id),
+            "progress_steps": self.dashboard.progress_steps(case.case_id),
             "alert_id": case.alert_id,
             "sector_id": case.sector_id,
             "needs": case.needs.model_dump(),

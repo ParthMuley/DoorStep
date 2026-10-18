@@ -58,6 +58,10 @@ Responses carry `schema_version: "2.0"`.
     - The network agent answers for the recovery org: `POST /recovery/{referral_id}/respond {org_id, decision: ACCEPTED|DECLINED|COMPLETED, evidence?}` (network token). COMPLETED needs `{"type":"SIMULATED_SERVICE_CONFIRMED","reference"}`. DECLINED returns `next_alternate`.
     - `GET /cases/{id}` shows a `recovery` block with `status`, `referrals` and `housing_secured`.
 
+**Card data (B7):** `GET /dashboard/summary` (counts, unresolved queue, alerts, outreach, closures, recovery), `GET /dashboard/cases` (coarse locations + progress), and `progress_steps` on `GET /cases/{id}`. `GET /health` reports version 2.1.0 and feed freshness.
+
+**v1 routes:** still mounted for A's old test (`tests/integration/test_fetch_backend_client.py`) and `workflows/backend_client.py`. A's agents no longer call any v1-only endpoint (they use `GET /cases/{id}` and the v2 routes). Remove them in one PR together with A's v1 client and test (plan §6.2).
+
 **Removed (v2.0):** `/organizations/{id}/volunteers`, `/orgs/{id}/volunteers`, `/orgs/{id}/volunteers/{vid}/availability`, `/orgs/{id}/outreach`, `X-Org-Agent`. A's stand-ins for these should switch to the v2.1 routes above.
 
 **Request for A (`.env.example`):** add `NETWORK_AGENT_TOKEN=` and `MONGODB_PARTNERS_DB=doorstep_partners`.

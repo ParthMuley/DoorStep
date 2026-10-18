@@ -243,6 +243,9 @@ class Store:
     def referral_by_key(self, key: str) -> Optional[RecoveryReferral]:
         return self._get("referrals", {"idempotency_key": key}, RecoveryReferral)
 
+    def referrals_for_case_all(self) -> list[RecoveryReferral]:
+        return self._list("referrals", {}, RecoveryReferral)
+
     def referrals_for_case(self, case_id: str) -> list[RecoveryReferral]:
         return self._list("referrals", {"case_id": case_id}, RecoveryReferral)
 

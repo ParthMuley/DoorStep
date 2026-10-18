@@ -41,7 +41,20 @@ def pick(header: Optional[str], body: Optional[s.Body]) -> Optional[str]:
 # ------------------------------------------------------------------ reads
 @router.get("/health")
 def health(service: DoorstepService = Depends(svc)):
-    return out({"status": "ok", "simulation_mode": True, "databases": service.db.ping()})
+    feeds = list(service.db.coll("feeds").find({}))
+    return out({"status": "ok", "version": "2.1.0", "simulation_mode": True, "databases": service.db.ping(),
+                "alerts": {"feed_freshness": service.alerts.simulated_freshness(),
+                           "last_ingest_at": max((f.get("last_ingest_at") or "" for f in feeds), default=None) or None}})
+
+
+@router.get("/dashboard/summary")
+def dashboard_summary(service: DoorstepService = Depends(svc)):
+    return out(service.dashboard.summary(), version=V2)
+
+
+@router.get("/dashboard/cases")
+def dashboard_cases(service: DoorstepService = Depends(svc)):
+    return out(service.dashboard.cases(), version=V2)
 
 
 @router.get("/cases")
