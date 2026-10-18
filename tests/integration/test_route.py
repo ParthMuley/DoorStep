@@ -12,6 +12,7 @@ from uagents import Context
 from doorstep.agents.route import RouteAgent
 from doorstep.integrations.fetch_messages import RouteRequest, RouteResponse, utc_now
 from doorstep.integrations.here_client import HereRouter, RouteRefused, avoid_param, enlarge_only
+from doorstep.integrations.map_image import tiny_png
 from tests.integration.conftest import make_agent, run_until
 from tests.integration.fake_v2_backend import make_v2_backend, network_client
 
@@ -95,10 +96,22 @@ async def accepted_assignment(backend) -> str:
     return match["assignment_id"]
 
 
-async def plan_twice(monkeypatch, here_body, cap: str = "50"):
+class FakeHereWithImage(FakeHere):
+    """Also stands in for image.maps.hereapi.com (Map Image v3)."""
+
+    def handle(self, request: httpx.Request) -> httpx.Response:
+        if request.url.host.startswith("image."):
+            self.calls.append({"image": [request.url.path]})
+            return httpx.Response(200, content=tiny_png(), headers={"content-type": "image/png"})
+        return super().handle(request)
+
+
+async def plan_twice(monkeypatch, here_body, cap: str = "50", here: FakeHere | None = None, keep: dict | None = None):
     monkeypatch.setenv("HERE_MAX_CALLS_PER_DAY", cap)
     backend, _ = make_v2_backend(monkeypatch)
-    here = FakeHere(here_body)
+    if keep is not None:
+        keep["backend"] = backend
+    here = here or FakeHere(here_body)
     agent = make_agent("route")
     route = RouteAgent(lambda: backend, HereRouter(api_key="test-key", transport=here.transport))
     agent.include(route.protocol())
@@ -155,3 +168,23 @@ async def test_daily_cap_blocks_paid_calls(monkeypatch):
     out, here = await plan_twice(monkeypatch, here_response(GOOD), cap="0")
     assert out["first"].status == "NO_ROUTE_CONFIRMED" and here.calls == []  # cap reached: no HERE call
     assert "HERE_DAILY_CAP_REACHED" in out["first"].reasons
+
+
+async def test_map_is_rendered_uploaded_to_b_and_publicly_readable(monkeypatch):
+    monkeypatch.setenv("ROUTE_MAP_IMAGES", "true")
+    keep: dict = {}
+    here = FakeHereWithImage(here_response(GOOD))
+    out, here = await plan_twice(monkeypatch, None, here=here, keep=keep)
+    r = out["first"]
+    assert r.status == "ILLUSTRATIVE_ONLY" and r.map_url and "/maps/" in r.map_url and r.map_url.endswith(".png")
+    assert len(here.calls) == 2 and out["again"].map_url == r.map_url  # route + image, then cached
+    backend = keep["backend"]
+    from fastapi.testclient import TestClient  # sync: the stopped Bureau cancels pending tasks on this loop
+    got = TestClient(backend._transport.app).get(urlparse(r.map_url).path)  # public: no token
+    assert got.status_code == 200 and got.content[1:4] == b"PNG" and got.headers["x-robots-tag"] == "noindex"
+
+
+async def test_map_failure_never_fails_the_route(monkeypatch):
+    monkeypatch.setenv("ROUTE_MAP_IMAGES", "true")
+    out, _ = await plan_twice(monkeypatch, here_response(GOOD))  # FakeHere answers the image call with JSON
+    assert out["first"].status == "ILLUSTRATIVE_ONLY" and out["first"].map_url is None

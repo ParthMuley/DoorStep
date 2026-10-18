@@ -39,7 +39,8 @@ def route_overlays(route: list[tuple[float, float]], stops: list[dict[str, Any]]
             out.append("polygon:" + ",".join(f"{lat:.5f},{lon:.5f}" for lon, lat in ring) + ";" + style)
     out.append("line:" + flexpolyline.encode([(lat, lon) for lon, lat in route], precision=5) + ";" + ROUTE_STYLE)
     labels = {"VOLUNTEER_START": "Start", "PICKUP": "Pickup", "SHELTER": "Shelter"}
-    out.append("point:" + "|".join(f"{s['lat']:.5f},{s['lon']:.5f};label={labels.get(s.get('kind'), 'Stop')}"
+    out.append("point:" + "|".join(f"{s['lat']:.5f},{s['lon']:.5f};"
+                                   f"label={labels.get(s.get('kind') or s.get('role'), 'Stop')}"
                                    for s in stops) + "|size=small")
     return out
 

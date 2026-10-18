@@ -225,3 +225,14 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
 - Spec: team plan §000.7 (`PUT /maps/{map_id}` with an agent token; public `GET /maps/{map_id}.png`; unguessable id; 24 h or assignment-end expiry; `noindex`).
 - The URL goes only to the assigned volunteer, after Accept.
 - All open asks and questions for B are consolidated in team plan **§000.9** (revision 6).
+
+### After B8 (2026-10-18)
+- Fast-forwarded to B's `2a0d0ec`.
+- Stand-ins deleted.
+- Linked senders for residents and volunteers.
+- Route map rendered, uploaded to `/maps` and shown in the volunteer trip card (https only).
+- Drive-time ranking: Matching → Route → B `drive_minutes`.
+- New asks for B, in team plan **§000.11**:
+  - `POST /routes/candidates` (stand-in in `fake_v2_backend.py`);
+  - fix the unit-test `.env` leak (`create_app()` → `load_dotenv()` after `hermetic_env`).
+- 58/58 integration tests pass on B's real routes. B's unit tests pass when the placeholders are preset.

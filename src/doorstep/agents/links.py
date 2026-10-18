@@ -25,7 +25,7 @@ class Link:
     case_id: str | None = None        # residents
     volunteer_id: str | None = None   # volunteers
     org_id: str | None = None         # volunteers
-    backend_sender: str | None = None  # what B accepts as `sender` for this person's answers
+    backend_sender: str | None = None  # the linked ASI:One address (B v2.2 accepts it with the Doorstep token)
 
 
 MENTION = re.compile(r"^\s*(?:@\S+\s*)+")  # ASI:One prefixes messages with "@agent1q..." mentions
@@ -43,7 +43,7 @@ def link_from_backend(address: str, res: dict[str, Any]) -> Link:
     person = res.get("resident_id") or res.get("volunteer_id") or res.get("coordinator_id") or ""
     return Link(address=address, role=role, person_id=person, display_name=res.get("display_name", person),
                 case_id=res.get("case_id"), volunteer_id=res.get("volunteer_id"), org_id=res.get("org_id"),
-                backend_sender=res.get("sender_for_backend") or address)
+                backend_sender=address)
 
 
 class LinkRegistry:

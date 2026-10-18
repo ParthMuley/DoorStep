@@ -41,6 +41,18 @@ def offline_agents(monkeypatch):
     monkeypatch.setenv("REQUIRE_LINK", "false")
     # One-message-per-part (legacy) unless a test turns coalescing on (test_outbox.py).
     monkeypatch.setenv("PUSH_COALESCE_SECONDS", "0")
+    # .env may hold the real (Render) tokens and B's create_app() calls load_dotenv(), which
+    # never overrides a variable that is already set: pin the placeholders so both sides match.
+    for name, value in (("DEMO_AUTH_TOKEN", "change-me-local-demo-token"),
+                        ("NETWORK_AGENT_TOKEN", "change-me-network-agent-token"),
+                        ("DOORSTEP_AGENT_TOKEN", "change-me-doorstep-agent-token"),
+                        ("ROUTE_AGENT_TOKEN", "change-me-route-agent-token"),
+                        ("CALAMITY_AGENT_TOKEN", "change-me-calamity-agent-token")):
+        monkeypatch.setenv(name, value)
+    for name in ("PUBLIC_BASE_URL", "DOORSTEP_API_URL"):
+        monkeypatch.setenv(name, "")
+    monkeypatch.setenv("ROUTE_MAP_IMAGES", "false")  # map rendering is tested on its own (test_route.py)
+    monkeypatch.setenv("DRIVE_TIME_RANKING", "false")  # tested on its own (test_drive_time.py)
 
 
 def make_agent(name: str) -> Agent:

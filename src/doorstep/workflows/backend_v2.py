@@ -8,6 +8,8 @@ acts for all partner orgs; every write names its `org_id` and B checks it.
 import os
 from typing import Any
 
+import httpx
+
 from doorstep.workflows.backend_client import BackendError, DoorstepBackend  # noqa: F401
 
 V2 = "2.0"
@@ -23,6 +25,13 @@ DEFAULT_DOORSTEP_TOKEN = "change-me-doorstep-agent-token"  # rev 4 §0.5; real v
 
 def doorstep_agent_token() -> str:
     return os.getenv("DOORSTEP_AGENT_TOKEN") or DEFAULT_DOORSTEP_TOKEN
+
+
+DEFAULT_ROUTE_TOKEN = "change-me-route-agent-token"  # B's default; real value only in .env
+
+
+def route_agent_token() -> str:
+    return os.getenv("ROUTE_AGENT_TOKEN") or DEFAULT_ROUTE_TOKEN
 
 
 class DoorstepBackendV2(DoorstepBackend):
@@ -75,20 +84,31 @@ class DoorstepBackendV2(DoorstepBackend):
                                    extra_headers=self._net())
 
     async def record_availability(self, alert_id: str, volunteer_id: str, org_id: str, available: bool,
-                                  responded_at: str, idempotency_key: str, correlation_id: str) -> dict[str, Any]:
+                                  responded_at: str, idempotency_key: str, correlation_id: str,
+                                  sender: str | None = None) -> dict[str, Any]:
+        """`sender`: the volunteer's linked ASI:One address when they answered themselves (B checks it)."""
         return await self._request(
             "POST", f"/alerts/{alert_id}/volunteers/{volunteer_id}/availability", correlation_id,
             self._v2(correlation_id, org_id=org_id, available=available, responded_at=responded_at,
-                     idempotency_key=idempotency_key), extra_headers=self._net())
+                     idempotency_key=idempotency_key, **({"sender": sender} if sender else {})),
+            extra_headers=self._net())
 
     # ---- matching + assignments
     async def propose_match(self, case_id: str, create_proposal: bool, idempotency_key: str, correlation_id: str,
-                            select_volunteer_id: str | None = None,
-                            select_site_id: str | None = None) -> dict[str, Any]:
+                            select_volunteer_id: str | None = None, select_site_id: str | None = None,
+                            drive_minutes: dict[str, float] | None = None) -> dict[str, Any]:
+        """`drive_minutes` (v2.2): B re-orders the ELIGIBLE volunteers by it; eligibility never changes."""
         return await self._request("POST", "/matches/propose", correlation_id, self._v2(
             correlation_id, case_id=case_id, create_proposal=create_proposal, idempotency_key=idempotency_key,
             authorization="SIMULATED_PREAPPROVED",
-            select={"volunteer_id": select_volunteer_id, "site_id": select_site_id}))
+            select={"volunteer_id": select_volunteer_id, "site_id": select_site_id}, drive_minutes=drive_minutes or None))
+
+    async def route_candidates(self, case_id: str, volunteer_ids: list[str], correlation_id: str) -> dict[str, Any]:
+        """`POST /routes/candidates` (asked of B, rev 6 §000.11; stand-in in fake_v2_backend.py): the pickup point,
+        each candidate's start and the avoid areas, for the Route agent only (Route token)."""
+        return await self._request("POST", "/routes/candidates", correlation_id,
+                                   self._v2(correlation_id, case_id=case_id, volunteer_ids=volunteer_ids),
+                                   extra_headers={"X-Agent-Token": route_agent_token()})
 
     async def accept_v2(self, assignment_id: str, org_id: str, decision: str, idempotency_key: str,
                         correlation_id: str, volunteer_id: str | None = None,
@@ -168,6 +188,22 @@ class DoorstepBackendV2(DoorstepBackend):
         return await self._request("POST", "/routes/previews", correlation_id, body)
 
     # ---- rev 4: account linking + deadlines (contract v2.2, plan §0.4-0.5)
+    async def put_map(self, map_id: str, png: bytes, assignment_id: str | None, correlation_id: str) -> dict[str, Any]:
+        """`PUT /maps/{map_id}` (contract v2.2 §5.13): raw PNG, Route agent token. Returns {url, expires_at}.
+        The map shows a pickup point: the id is unguessable and the URL goes only to the assigned volunteer."""
+        headers = {"X-Agent-Token": route_agent_token(), "Content-Type": "image/png", "X-Correlation-ID": correlation_id}
+        async with httpx.AsyncClient(base_url=self.base_url, transport=self._transport, timeout=self._timeout) as client:
+            resp = await client.put(f"/maps/{map_id}", content=png, headers=headers,
+                                    params={"assignment_id": assignment_id} if assignment_id else None)
+        if resp.status_code >= 400:
+            try:
+                body = resp.json()
+            except ValueError:
+                body = {}
+            raise BackendError(resp.status_code, body.get("error", "HTTP_ERROR"), body.get("detail", resp.text[:200]),
+                               body.get("reasons"))
+        return resp.json()
+
     async def link(self, code: str, asi_one_address: str, correlation_id: str) -> dict[str, Any]:
         """`POST /link`: only the Doorstep agent calls this, with the sender address taken from
         the ASI:One message envelope (never from typed text) and its own agent token."""

@@ -158,6 +158,35 @@ Every role: `LINK <code>`, `UNLINK` (demo), `register as resident` / `register a
 
 **Not built (on purpose):** B-side `notify` lists for check-ins and outreach. A's Doorstep agent already composes role cards, so only the sweep returns a `notify` list.
 
+### 000.11 A's follow-up to B8 (2026-10-18)
+**Done on `feat/fetch-agents`, fast-forwarded to B's `2a0d0ec`:**
+- **Stand-ins deleted.** `/link`, `/register` and invites now hit B's real routes. `tests/integration/fake_v2_backend.py` is B's app plus one new stand-in (below).
+- **Linked senders.** Resident replies send the linked ASI:One address (Doorstep token); `sender_for_backend` is gone. Volunteer availability sends `sender` = the linked address (`VolunteerAnswer.sender` → Volunteer Network → B).
+- **Route map wired.** For an `ILLUSTRATIVE_ONLY` route, the Route agent renders the HERE map (one more call, same daily cap) and calls `PUT /maps/{secrets.token_urlsafe(24)}?assignment_id=…` with `ROUTE_AGENT_TOKEN`. It returns `RouteResponse.map_url`.
+  - The volunteer's trip card shows it as `hero_image` **only when the URL is https** (ASI:One rejects the card otherwise).
+  - A failed map never fails the route. The map id is never logged. `ROUTE_MAP_IMAGES=false` turns it off.
+- **Drive-time ranking wired:**
+  1. The Matching agent calls `/matches/propose` with `create_proposal: false` to get B's eligible volunteers.
+  2. It sends the top `DRIVE_TIME_CANDIDATES` (3) to the Route agent (`DriveTimeRequest`).
+  3. The Route agent makes one HERE route per candidate (start → pickup, avoiding ORDER zones and official closures, counted in the cap).
+  4. Matching then proposes with `drive_minutes`; B ranks.
+  - Any failure falls back to distance. The match card shows "N min by road". `DRIVE_TIME_RANKING=false` turns it off.
+- **Tests:** our integration tests pin every token to its placeholder, so a developer's `.env` (now holding the Render tokens) can't change results. New: `test_drive_time.py` (Lee at 4 min by road beats Sarah at 15 min; ETA 4) and two map tests in `test_route.py` (render → B upload → public GET; a map failure keeps the route). **All 58 integration tests pass on B's real routes.**
+- `.env.example`: `ROUTE_AGENT_TOKEN`, `CALAMITY_AGENT_TOKEN`, `REPLY_DEADLINE_MINUTES`, `MAP_TTL_HOURS`, `PUBLIC_BASE_URL`, `MONGODB_PARTNERS_DB`, `ROUTE_MAP_IMAGES`, `DRIVE_TIME_RANKING`, `DRIVE_TIME_CANDIDATES`.
+
+**New asks for B:**
+1. **`POST /routes/candidates`** (Route token): the Route agent needs coordinates for *candidate* volunteers before anyone accepts, and `/routes/constraints` only covers accepted assignments.
+   - Body `{case_id, volunteer_ids (≤5)}` → `{case_id, pickup: {lat, lon}, candidates: [{volunteer_id, lat, lon}], avoid_areas: [{kind, id, geometry}]}`.
+   - Only volunteers B lists as eligible for that case should be returned (409 otherwise); never in GET views.
+   - The stand-in is in `fake_v2_backend.py` (`build_candidates_standin`) and uses your `store.partners.locate_volunteer` and `routes._order_areas` / `_official_areas`.
+2. **Unit-test `.env` leak:**
+   - `create_app()` calls `load_dotenv()`, which reloads `.env` *after* `tests/unit/conftest.py`'s `hermetic_env` has deleted the tokens.
+   - On a machine whose `.env` holds the Render tokens, `test_http_accept_requires_network_token` and `test_v2_scenarios_end_to_end` fail with 403.
+   - With the placeholders preset, all 218 unit tests pass.
+   - Fix: in `hermetic_env`, `setenv` the placeholder values instead of `delenv` (`load_dotenv` never overrides a set variable), or skip `load_dotenv` when `PYTEST_CURRENT_TEST` is set.
+
+**For the live run, A needs:** the Render URL (`DOORSTEP_API_URL`) in A's `.env`. The tokens are already there.
+
 ## 00. Revision 5 (2026-10-18, proposed by A, agreed by B): self-registration in ASI:One
 
 **Why:** today a person can only link to a record that already exists (seeded one-time codes). Revision 5 lets a resident or a volunteer **register themselves in their own ASI:One chat**, before a disaster, and be linked in the same step.

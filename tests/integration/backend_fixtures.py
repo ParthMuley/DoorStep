@@ -12,7 +12,7 @@ DAVID = "case_david_002"
 
 def make_backend(monkeypatch) -> DoorstepBackend:
     monkeypatch.setenv("SIMULATION_MODE", "true")
-    monkeypatch.delenv("DEMO_AUTH_TOKEN", raising=False)
+    monkeypatch.setenv("DEMO_AUTH_TOKEN", "change-me-local-demo-token")  # .env must not leak in
     app = create_app(":memory:", seed=True)
     return DoorstepBackend(base_url="http://backend.test", token="change-me-local-demo-token",
                            transport=httpx.ASGITransport(app=app))

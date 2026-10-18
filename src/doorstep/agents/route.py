@@ -12,10 +12,15 @@ No LLM anywhere in routing. Never "safe". The ETA is an illustrative estimate.
 Free tier: one HERE call per assignment (cached by idempotency key) and a daily cap
 (HERE_MAX_CALLS_PER_DAY, default 50); past the cap -> NO_ROUTE_CONFIRMED, no call.
 
+Map (rev 6 §000.7): for an ILLUSTRATIVE_ONLY route it renders a HERE Map Image (one more
+call, same cap), uploads it to B (`PUT /maps/{unguessable id}`) and returns `map_url`.
+A failed map never fails the route. ROUTE_MAP_IMAGES=false turns it off.
+
 Run:  python -m doorstep.agents.route
 """
 
 import os
+import secrets
 from datetime import datetime, timezone
 from typing import Any, Callable
 
@@ -23,11 +28,21 @@ from dotenv import load_dotenv
 from uagents import Context, Protocol
 
 from doorstep.agents.base import build_agent, role_port, seed_for
-from doorstep.integrations.fetch_messages import RouteRequest, RouteResponse, utc_now
+from doorstep.integrations.fetch_messages import (
+    DriveTimeRequest,
+    DriveTimeResponse,
+    RouteRequest,
+    RouteResponse,
+    utc_now,
+)
 from doorstep.integrations.here_client import HereRouter, RouteRefused
+from doorstep.integrations.map_image import fetch_map_png, route_overlays
 from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
 
 load_dotenv()
+
+
+DRIVE_TIME_MAX = 5  # never more HERE calls than this per match
 
 
 def daily_cap() -> int:
@@ -39,6 +54,7 @@ class RouteAgent:
         self.get_backend = get_backend
         self.here = here or HereRouter()
         self.cache: dict[str, RouteResponse] = {}
+        self.drive_cache: dict[str, DriveTimeResponse] = {}
         self.calls: dict[str, int] = {}  # UTC day -> HERE calls made (also mirrored to ctx.storage)
 
     def _reply(self, msg: RouteRequest, status: str, **kw: Any) -> RouteResponse:
@@ -100,11 +116,60 @@ class RouteAgent:
             return self._remember(msg, self._reply(msg, status, reasons=reasons, avoided=avoided,
                                                    route_preview_id=preview.get("route_preview_id")))
         eta = (preview.get("eta") or {}).get("minutes")
+        map_url = await self.render_map(ctx, msg, route, stops, c.get("avoid_areas", []))
         return self._remember(msg, self._reply(
             msg, status, route_preview_id=preview.get("route_preview_id"), distance_m=route.distance_m,
             duration_s=route.duration_s, eta_pickup_minutes=round(route.leg_durations_s[0] / 60) if route.leg_durations_s else eta,
             directions=route.directions, avoided=avoided, cautions_on_path=list(preview.get("cautions_on_path", [])),
-            label=preview.get("label") or "ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"))
+            label=preview.get("label") or "ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION", map_url=map_url))
+
+    async def render_map(self, ctx: Context, msg: RouteRequest, route: Any, stops: list[dict[str, Any]],
+                         avoid_areas: list[dict[str, Any]]) -> str | None:
+        """HERE Map Image -> B's /maps. Never logs the map id (it is the only secret in the URL)."""
+        if os.getenv("ROUTE_MAP_IMAGES", "true").lower() == "false" or not self._budget_ok(ctx):
+            return None
+        try:
+            png = await fetch_map_png(route_overlays(route.coordinates, stops, avoid_areas),
+                                      api_key=self.here.api_key, transport=self.here._transport)
+            res = await self.get_backend().put_map(secrets.token_urlsafe(24), png, msg.assignment_id,
+                                                   msg.correlation_id)
+            return res.get("url")
+        except (RuntimeError, BackendError, OSError) as err:
+            ctx.logger.warning(f"[{msg.correlation_id}] route map skipped: {type(err).__name__}")
+            return None
+
+    async def drive_times(self, ctx: Context, msg: DriveTimeRequest) -> DriveTimeResponse:
+        """Minutes by road from each candidate's start to the pickup, avoiding ORDER zones and
+        official closures (one HERE call per candidate, counted in the daily cap). Numbers only:
+        B keeps the ranking rule."""
+        out = DriveTimeResponse(correlation_id=msg.correlation_id, created_at=utc_now(), case_id=msg.case_id)
+        if msg.idempotency_key in self.drive_cache:
+            return self.drive_cache[msg.idempotency_key]
+        try:
+            c = await self.get_backend().route_candidates(msg.case_id, msg.volunteer_ids[:DRIVE_TIME_MAX],
+                                                          msg.correlation_id)
+        except BackendError as err:
+            out.reasons = err.reasons or [err.code]
+            return out
+        except OSError:
+            out.reasons = ["BACKEND_UNREACHABLE"]
+            return out
+        pickup, avoid = c["pickup"], c.get("avoid_areas", [])
+        for cand in c.get("candidates", []):
+            if not self._budget_ok(ctx):
+                out.reasons.append("HERE_DAILY_CAP_REACHED")
+                break
+            try:
+                route = await self.here.route([cand, pickup], avoid)
+            except RouteRefused as err:
+                out.reasons.append(err.reason)
+                continue
+            if route is None or route.violated:
+                out.reasons.append(f"NO_ROUTE:{cand['volunteer_id']}")
+                continue
+            out.drive_minutes[cand["volunteer_id"]] = round(route.duration_s / 60, 1)
+        self.drive_cache[msg.idempotency_key] = out
+        return out
 
     def _remember(self, msg: RouteRequest, reply: RouteResponse) -> RouteResponse:
         self.cache[msg.idempotency_key] = reply
@@ -117,6 +182,13 @@ class RouteAgent:
         async def on_route(ctx: Context, sender: str, msg: RouteRequest):
             reply = await self.plan(ctx, msg)
             ctx.logger.info(f"[{msg.correlation_id}] route {msg.assignment_id}: {reply.status} {reply.reasons}")
+            await ctx.send(sender, reply)
+
+        @proto.on_message(DriveTimeRequest, replies=DriveTimeResponse)
+        async def on_drive_times(ctx: Context, sender: str, msg: DriveTimeRequest):
+            reply = await self.drive_times(ctx, msg)
+            ctx.logger.info(f"[{msg.correlation_id}] drive times {msg.case_id}: {len(reply.drive_minutes)} "
+                            f"of {len(msg.volunteer_ids)} {reply.reasons}")
             await ctx.send(sender, reply)
 
         return proto

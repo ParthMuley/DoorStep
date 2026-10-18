@@ -331,7 +331,8 @@ def pickup_confirm_card(*, case_id: str, who: str) -> Card:
 
 
 def trip_card(*, case_id: str, name: str, progress: list[tuple[str, bool]], rows: list[tuple[str, Any]],
-              next_step: str, cta: tuple[str, dict[str, Any]] | None, intro: str, extra_text: str = "") -> Card:
+              next_step: str, cta: tuple[str, dict[str, Any]] | None, intro: str, extra_text: str = "",
+              image_url: str | None = None) -> Card:
     """A resident's or volunteer's whole trip in one card. ASI:One folds every message that
     arrives before the person's next reply into one bubble and renders only the last card,
     so each update is a full snapshot (progress, next step, the one button that applies)."""
@@ -342,6 +343,8 @@ def trip_card(*, case_id: str, name: str, progress: list[tuple[str, bool]], rows
     button = cta or ("Refresh", {"action": "case_status", "case_id": case_id})
     payload = {"title": f"{SIM_PREFIX} · Your trip · {name}", "summary_rows": summary,
                "ctas": [{"label": button[0], "selection": button[1], "primary": True}]}
+    if image_url and image_url.startswith("https://"):  # ASI:One rejects the card for data:/http images
+        payload["hero_image"] = image_url
     text = f"{intro}\n{_rows_text(summary)}" + (f"\n{extra_text}" if extra_text else "")
     return Card("detail", payload, text)
 

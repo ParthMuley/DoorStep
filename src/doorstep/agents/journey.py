@@ -243,7 +243,7 @@ class Journey:
         ack = await self.ask(ctx, self.address_for("NETWORK"), VolunteerAnswer(
             correlation_id=corr, created_at=utc_now(), alert_id=alert_id, volunteer_id=link.volunteer_id,
             org_id=sel.get("org_id") or link.org_id, available=bool(sel.get("available")),
-            idempotency_key=f"{alert_id}:avail:{link.volunteer_id}"), VolunteerAnswerAck)
+            idempotency_key=f"{alert_id}:avail:{link.volunteer_id}", sender=link.address), VolunteerAnswerAck)
         if ack is None or ack.error:
             return f"Your answer could not be recorded ({(ack.error or {}).get('code') if ack else 'no reply'})."
         await self.push(ctx, f"{link.display_name} answered in their own chat: {ack.availability}.")
@@ -317,7 +317,8 @@ class Journey:
             return f"Matching refused: {result.error.get('code')} ({result.error.get('detail')}). Nothing was proposed."
         r = result.result
         vols, shelters = r["evaluation"]["volunteers"], r["evaluation"]["shelters"]
-        chosen = [{"label": f"{e['volunteer_id']} · {e.get('vehicle_type', '')} · {e['org_id']} · {e.get('distance_km')} km",
+        chosen = [{"label": f"{e['volunteer_id']} · {e.get('vehicle_type', '')} · {e['org_id']} · {e.get('distance_km')} km"
+                            + (f" · {e['drive_minutes']:g} min by road" if e.get("drive_minutes") is not None else ""),
                    "reasons": e["reason_codes"]} for e in vols["eligible"]]
         rejected = [{"label": f"{x['volunteer_id']} · {x['org_id']}", "reasons": x["reason_codes"]}
                     for x in vols["rejected"]]
@@ -568,8 +569,11 @@ class Journey:
                         "Confirm only once you are in the volunteer's vehicle."), pickup
         else:
             nxt, cta = "A coordinator is arranging help; nothing is confirmed yet.", None
+        image = getattr(j.route, "map_url", None) if mine else None  # pickup point: volunteer only
+        if image and not image.startswith("https://"):
+            rows.append(("Map", "rendered; shown once the backend has a public https address"))
         return trip_card(case_id=case_id, name=NAMES.get(case_id, case_id), progress=progress, rows=rows,
-                         next_step=nxt, cta=cta, intro=intro, extra_text=directions)
+                         next_step=nxt, cta=cta, intro=intro, extra_text=directions, image_url=image)
 
     async def case_map(self, case_id: str, corr: str, step_response: dict[str, Any]) -> dict[str, str]:
         """Status color/label always from B: the step response if it has one, else the case record."""

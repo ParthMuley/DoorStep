@@ -74,6 +74,19 @@ class MatchResult(_Msg):
     error: Optional[dict[str, Any]] = None
 
 
+# --- Matching <-> Route (drive-time ranking, contract v2.2 §5.6 `drive_minutes`)
+class DriveTimeRequest(_Msg):
+    case_id: str
+    volunteer_ids: list[str]  # B's top eligible volunteers (at most DRIVE_TIME_CANDIDATES)
+    idempotency_key: str
+
+
+class DriveTimeResponse(_Msg):
+    case_id: str
+    drive_minutes: dict[str, float] = {}  # volunteer_id -> minutes by road (start -> pickup)
+    reasons: list[str] = []  # why some or all are missing (cap, no route, backend...)
+
+
 # --- Doorstep <-> Organization agent (acceptance, journey reports)
 Role = Literal["VOLUNTEER", "SHELTER"]
 
@@ -136,6 +149,7 @@ class VolunteerAnswer(_Msg):
     org_id: str
     available: bool
     idempotency_key: str
+    sender: Optional[str] = None  # linked ASI:One address (envelope sender), checked by B
 
 
 class VolunteerAnswerAck(_Msg):
@@ -181,6 +195,7 @@ class RouteResponse(_Msg):
     avoided: list[dict[str, Any]] = []
     cautions_on_path: list[str] = []
     label: str = "ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"
+    map_url: Optional[str] = None  # hosted route map (B's /maps), for the assigned volunteer only
 
 
 # --- Doorstep <-> Escalation Simulator
