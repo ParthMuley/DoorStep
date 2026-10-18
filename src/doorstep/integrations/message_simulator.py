@@ -15,7 +15,7 @@ from doorstep.services.errors import Conflict
 from doorstep.services.store import Store
 
 DEMO_SENDER = "sim_doorstep_demo"  # simulator id for Doorstep outbound
-MAX_OUTBOUND_PER_CASE = 25  # simple rate limit for the demo
+MAX_OUTBOUND_PER_CASE = 25  # simple rate limit per recipient for the demo
 
 
 class MessageSimulator:
@@ -25,13 +25,14 @@ class MessageSimulator:
         self.db = db
         self.store = store
 
-    def send(self, *, case_id: str, recipient: str, body: str, language: str,
+    def send(self, *, case_id: Optional[str], recipient: str, body: str, language: str,
              template_id: Optional[str] = None, correlation_id: str = "") -> MessageEvent:
         if not body.startswith("DOORSTEP DEMO"):
             raise ValueError("Outbound simulated messages must be labeled DOORSTEP DEMO")
-        sent = [m for m in self.store.list_messages(case_id) if m.direction == MessageDirection.OUTBOUND]
-        if len(sent) >= MAX_OUTBOUND_PER_CASE:
-            raise Conflict("Outbound message rate limit reached for this case", reasons=["RATE_LIMITED"])
+        sent = self.db.coll("messages").count_documents({"direction": MessageDirection.OUTBOUND.value,
+                                                         "recipient": recipient})
+        if sent >= MAX_OUTBOUND_PER_CASE:
+            raise Conflict("Outbound message rate limit reached for this recipient", reasons=["RATE_LIMITED"])
         msg = MessageEvent(
             message_id=self.db.next_id("msg"),
             case_id=case_id,

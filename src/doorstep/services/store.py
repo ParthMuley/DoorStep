@@ -20,14 +20,11 @@ from doorstep.models import (
     Escalation,
     MessageEvent,
     Offer,
-    Organization,
     ProviderRegistration,
     RecoveryReferral,
     Resident,
     ResidentProfile,
     ServiceRequest,
-    Volunteer,
-    VolunteerAvailability,
     VerificationEvent,
 )
 
@@ -36,6 +33,7 @@ from pymongo.errors import DuplicateKeyError
 from .db import Database
 from .errors import NotFound
 from .legacy import to_legacy_resident
+from .partners import PartnerStore
 
 M = TypeVar("M", bound=BaseModel)
 ACCEPTED_STATES = ("ACCEPTED", "COMPLETED")
@@ -48,6 +46,7 @@ def _strip(doc: dict[str, Any]) -> dict[str, Any]:
 class Store:
     def __init__(self, db: Database):
         self.db = db
+        self.partners = PartnerStore(db)
 
     # --- generic helpers -------------------------------------------------
     def _get(self, coll: str, query: dict[str, Any], model: Type[M]) -> Optional[M]:
@@ -75,32 +74,7 @@ class Store:
             update["$unset"] = {f: "" for f in unset}
         self.db.coll(coll).update_one({"_id": key}, update, upsert=True)
 
-    # --- organizations (doorstep_orgs) ------------------------------------
-    def save_organization(self, o: Organization) -> None:
-        self._upsert("organizations", o.org_id, o)
-
-    def get_organization(self, org_id: str) -> Organization:
-        return self._require("organizations", {"_id": org_id}, Organization, org_id)
-
-    def find_organization(self, org_id: str) -> Optional[Organization]:
-        return self._get("organizations", {"_id": org_id}, Organization)
-
-    def list_organizations(self) -> list[Organization]:
-        return self._list("organizations", {}, Organization, sort="_id")
-
-    def add_volunteer(self, org_id: str, v: Volunteer) -> bool:
-        """Append a volunteer; False if the org is missing or the volunteer_id already exists there."""
-        result = self.db.coll("organizations").update_one(
-            {"_id": org_id, "volunteers.volunteer_id": {"$ne": v.volunteer_id}},
-            {"$push": {"volunteers": v.model_dump(mode="json")}})
-        return result.modified_count == 1
-
-    def set_volunteer_availability(self, org_id: str, volunteer_id: str, a: VolunteerAvailability) -> bool:
-        result = self.db.coll("organizations").update_one(
-            {"_id": org_id, "volunteers.volunteer_id": volunteer_id},
-            {"$set": {"volunteers.$.availability": a.model_dump(mode="json")}})
-        return result.matched_count == 1
-
+    # --- partners (doorstep_partners): see services/partners.py ----------------
     def record_provider_event(self, key: str, payload: dict) -> tuple[dict, bool]:
         """Idempotent provider-side event. Returns (stored payload, created?)."""
         coll = self.db.coll("provider_events")
@@ -250,6 +224,9 @@ class Store:
 
     def save_escalation(self, e: Escalation) -> None:
         self._upsert("escalations", e.escalation_id, e)
+
+    def get_escalation(self, escalation_id: str) -> Escalation:
+        return self._require("escalations", {"_id": escalation_id}, Escalation, escalation_id)
 
     def escalation_by_key(self, key: str) -> Optional[Escalation]:
         return self._get("escalations", {"idempotency_key": key}, Escalation)

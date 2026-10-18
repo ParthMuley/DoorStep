@@ -34,6 +34,16 @@ class Assignment(DoorstepModel):
     idempotency_key: str
     # A proposal can pair transport + destination; each is its own row, linked.
     linked_assignment_id: Optional[str] = None
+    # Contract v2.0: transport rows name the org's volunteer; shelter rows name the site.
+    volunteer_id: Optional[str] = None
+    vehicle_type: Optional[str] = None
+    site_id: Optional[str] = None
+    region_id: Optional[str] = None
+    alert_id: Optional[str] = None
+    eta_minutes: Optional[int] = None
+    # Resident side of pickup, recorded from a resident/caregiver SMS (contract v2.1 §5.12).
+    resident_pickup_confirmed_at: Optional[str] = None
+    resident_pickup_confirmed_by: Optional[str] = None
     confirmed_pickup_at: Optional[str] = None
     confirmed_arrival_at: Optional[str] = None
     correlation_id: str = ""

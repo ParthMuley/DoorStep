@@ -38,6 +38,39 @@ class Location(DoorstepModel):
     lon: float = Field(ge=-180, le=180)
 
 
+class GeoPoint(DoorstepModel):
+    """GeoJSON Point; coordinates are [lon, lat]."""
+
+    type: str = "Point"
+    coordinates: list[float]
+
+    @field_validator("type")
+    @classmethod
+    def _type(cls, v: str) -> str:
+        if v != "Point":
+            raise ValueError("location must be a GeoJSON Point")
+        return v
+
+    @field_validator("coordinates")
+    @classmethod
+    def _coords(cls, v: list[float]) -> list[float]:
+        if len(v) != 2 or not (-180 <= v[0] <= 180) or not (-90 <= v[1] <= 90):
+            raise ValueError("coordinates must be [lon, lat]")
+        return v
+
+    @property
+    def lon(self) -> float:
+        return self.coordinates[0]
+
+    @property
+    def lat(self) -> float:
+        return self.coordinates[1]
+
+
+def point(lat: float, lon: float) -> GeoPoint:
+    return GeoPoint(coordinates=[lon, lat])
+
+
 class EmergencyContact(DoorstepModel):
     contact_id: Optional[str] = None  # assigned by B if missing
     name: str
@@ -133,7 +166,7 @@ class Volunteer(DoorstepModel):
     volunteer_id: str
     name: str
     phone: str
-    address: Address
+    location: GeoPoint  # where the volunteer is (decides their region)
     vehicle_type: str = "SEDAN"  # free label: WHEELCHAIR_VAN, MINIVAN, SEDAN, SUV, BUS
     vehicle_seats: int = Field(default=1, ge=0)
     wheelchair_spaces: int = Field(default=0, ge=0)
@@ -153,8 +186,7 @@ class Volunteer(DoorstepModel):
 class ShelterSite(DoorstepModel):
     site_id: str
     name: str
-    lat: float = Field(ge=-90, le=90)
-    lon: float = Field(ge=-180, le=180)
+    location: GeoPoint
     beds_available: int = Field(default=0, ge=0)
     features: list[int] = Field(default_factory=list)
 
@@ -165,25 +197,64 @@ class ShelterSite(DoorstepModel):
 
 
 class Organization(DoorstepModel):
+    """Canonical org record (doorstep_partners.organizations). No volunteers here:
+    they live in the region where they are (plan rev 3)."""
+
     org_id: str
     name: str
-    location: Location
+    calamity_types: list[CalamityType] = Field(default_factory=list)
+    services: list[OrgService] = Field(default_factory=list)
+    approved: bool = False  # simulated partner preapproval, never decided by an LLM
+    service_radius_km: float = Field(default=25, gt=0)
+    recovery_services: list[RecoveryHelpType] = Field(default_factory=list)
+    simulated: bool = True
+
+
+ORG_FACT_FIELDS = ("name", "calamity_types", "services", "approved", "service_radius_km", "recovery_services")
+
+
+class RegionOrg(DoorstepModel):
+    """An org's presence in ONE region: a copy of its canonical facts plus only
+    the volunteers and shelter sites located in that region."""
+
+    org_id: str
+    name: str
     calamity_types: list[CalamityType] = Field(default_factory=list)
     services: list[OrgService] = Field(default_factory=list)
     approved: bool = False
     service_radius_km: float = Field(default=25, gt=0)
-    agent_address: Optional[str] = None
+    recovery_services: list[RecoveryHelpType] = Field(default_factory=list)
     volunteers: list[Volunteer] = Field(default_factory=list)
     shelter_sites: list[ShelterSite] = Field(default_factory=list)
-    recovery_services: list[RecoveryHelpType] = Field(default_factory=list)
+
+    @classmethod
+    def from_org(cls, org: Organization) -> "RegionOrg":
+        return cls(org_id=org.org_id, **{f: getattr(org, f) for f in ORG_FACT_FIELDS})
+
+
+class Region(DoorstepModel):
+    """doorstep_partners.regions: one document per area (location-first)."""
+
+    region_id: str
+    label: str
+    center: GeoPoint
+    area: dict  # GeoJSON Polygon
+    orgs: list[RegionOrg] = Field(default_factory=list)
     simulated: bool = True
 
+    @field_validator("area")
+    @classmethod
+    def _area(cls, v: dict) -> dict:
+        if v.get("type") != "Polygon" or not v.get("coordinates"):
+            raise ValueError("area must be a GeoJSON Polygon")
+        return v
+
     @model_validator(mode="after")
-    def _unique_ids(self) -> "Organization":
-        vids = [v.volunteer_id for v in self.volunteers]
+    def _unique_ids(self) -> "Region":
+        oids = [o.org_id for o in self.orgs]
+        if len(oids) != len(set(oids)):
+            raise ValueError("Duplicate org_id in region")
+        vids = [v.volunteer_id for o in self.orgs for v in o.volunteers]
         if len(vids) != len(set(vids)):
-            raise ValueError("Duplicate volunteer_id in organization")
-        sids = [s.site_id for s in self.shelter_sites]
-        if len(sids) != len(set(sids)):
-            raise ValueError("Duplicate site_id in organization")
+            raise ValueError("Duplicate volunteer_id in region")
         return self

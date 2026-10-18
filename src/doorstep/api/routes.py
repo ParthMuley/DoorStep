@@ -8,14 +8,14 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import JSONResponse
 
 from doorstep.models import SCHEMA_VERSION
 from doorstep.services.engine import DoorstepService
 
 from . import schemas as s
-from .security import correlation_header, require_demo_token, require_org_agent
+from .security import correlation_header, require_agent_token, require_demo_token
 
 router = APIRouter()
 write = APIRouter(dependencies=[Depends(require_demo_token)])
@@ -71,6 +71,37 @@ def zones(service: DoorstepService = Depends(svc)):
     return out(service.zones_view())
 
 
+@router.get("/demo/feeds/caloes")
+def synthetic_caloes_feed(service: DoorstepService = Depends(svc)):
+    """Synthetic feed in the exact Cal OES GeoJSON shape (raw, no envelope)."""
+    return service.alerts.feed.render_caloes()
+
+
+@router.get("/regions/near")
+def regions_near(alert_id: Optional[str] = None, zone_id: Optional[str] = None, lat: Optional[float] = None,
+                 lon: Optional[float] = None, radius_km: Optional[float] = None, calamity_type: Optional[str] = None,
+                 service_type: Optional[str] = Query(default=None, alias="service"),
+                 service: DoorstepService = Depends(svc)):
+    return out(service.alerts.regions_near_view(alert_id=alert_id, zone_id=zone_id, lat=lat, lon=lon,
+                                                radius_km=radius_km, calamity_type=calamity_type,
+                                                service=service_type), version=V2)
+
+
+@router.get("/agents")
+def list_agents(service: DoorstepService = Depends(svc)):
+    return out({"agents": service.store.partners.list_agents()}, version=V2)
+
+
+@router.get("/alerts/active")
+def alerts_active(service: DoorstepService = Depends(svc)):
+    return out(service.alerts.active_view(), version=V2)
+
+
+@router.get("/alerts/{alert_id}/outreach")
+def alert_outreach(alert_id: str, service: DoorstepService = Depends(svc)):
+    return out(service.alerts.outreach_summary(alert_id), version=V2)
+
+
 @router.get("/sim/messages")
 def sim_messages(case_id: Optional[str] = None, service: DoorstepService = Depends(svc)):
     return out({"messages": [m.model_dump() for m in service.sim.outbox(case_id)], "simulated": True})
@@ -97,28 +128,46 @@ def register_resident(body: s.RegisterResidentBody, corr: Optional[str] = Depend
 @write.post("/organizations")
 def register_organization(body: s.RegisterOrganizationBody, corr: Optional[str] = Depends(correlation_header),
                           service: DoorstepService = Depends(svc)):
-    return out(service.registry.register_organization(body.organization, pick(corr, body) or ""), 201, V2)
+    view, created = service.registry.register_organization(body.organization, pick(corr, body) or "")
+    return out(view, 201 if created else 200, V2)
 
 
-@write.post("/organizations/{org_id}/volunteers")
-def add_volunteer(org_id: str, body: s.AddVolunteerBody, _: str = Depends(require_org_agent),
+@write.post("/regions")
+def create_region(body: s.RegionBody, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    return out(service.registry.create_region(body.region, pick(corr, body) or ""), 201, V2)
+
+
+@write.post("/regions/{region_id}/orgs/{org_id}")
+def add_presence(region_id: str, org_id: str, corr: Optional[str] = Depends(correlation_header),
+                 service: DoorstepService = Depends(svc)):
+    return out(service.registry.add_presence(region_id, org_id, corr or ""), 201, V2)
+
+
+@write.post("/regions/{region_id}/orgs/{org_id}/volunteers")
+def add_volunteer(region_id: str, org_id: str, body: s.AddVolunteerBody,
                   corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
-    return out(service.registry.add_volunteer(org_id, body.volunteer, pick(corr, body) or ""), 201, V2)
+    return out(service.registry.add_volunteer(region_id, org_id, body.volunteer, pick(corr, body) or ""), 201, V2)
 
 
-@write.get("/orgs/{org_id}/volunteers")
-def org_volunteers(org_id: str, alert_id: Optional[str] = None, _: str = Depends(require_org_agent),
-                   service: DoorstepService = Depends(svc)):
-    return out(service.registry.org_volunteers(org_id, alert_id), version=V2)
+@write.post("/regions/{region_id}/orgs/{org_id}/shelter_sites")
+def add_site(region_id: str, org_id: str, body: s.SiteBody, corr: Optional[str] = Depends(correlation_header),
+             service: DoorstepService = Depends(svc)):
+    return out(service.registry.add_site(region_id, org_id, body.site, pick(corr, body) or ""), 201, V2)
 
 
-@write.post("/orgs/{org_id}/volunteers/{volunteer_id}/availability")
-def record_availability(org_id: str, volunteer_id: str, body: s.AvailabilityBody,
-                        _: str = Depends(require_org_agent), corr: Optional[str] = Depends(correlation_header),
-                        service: DoorstepService = Depends(svc)):
+@write.post("/alerts/{alert_id}/volunteers/{volunteer_id}/availability", dependencies=[Depends(require_agent_token)])
+def record_availability(alert_id: str, volunteer_id: str, body: s.AvailabilityBody,
+                        corr: Optional[str] = Depends(correlation_header), service: DoorstepService = Depends(svc)):
     return out(service.registry.record_availability(
-        org_id, volunteer_id, alert_id=body.alert_id, available=body.available, responded_at=body.responded_at,
+        alert_id, volunteer_id, org_id=body.org_id, available=body.available, responded_at=body.responded_at,
         idempotency_key=body.idempotency_key, correlation_id=pick(corr, body) or ""), version=V2)
+
+
+@write.put("/agents/{role}")
+def register_agent(role: str, body: s.AgentAddressBody, service: DoorstepService = Depends(svc)):
+    service.store.partners.set_agent(role, body.agent_address)
+    return out({"role": role, "agent_address": body.agent_address}, version=V2)
 
 
 @write.post("/cases/{case_id}/responses")
@@ -194,6 +243,101 @@ def escalate_case(case_id: str, body: s.EscalateBody, corr: Optional[str] = Depe
     view, created = service.escalate_case(case_id, body.reason, idempotency_key=body.idempotency_key,
                                           correlation_id=pick(corr, body))
     return out(view, 201 if created else 200)
+
+
+@write.post("/alerts/ingest")
+def alerts_ingest(body: s.AlertIngestBody, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    return out(service.alerts.ingest(
+        source_id=body.source.source_id, source_type=body.source.source_type, url=body.source.url,
+        fetched_at=body.source.fetched_at, fetch_ok=body.fetch_ok, http_status=body.http_status, error=body.error,
+        payload=body.payload, idempotency_key=body.idempotency_key, correlation_id=pick(corr, body) or ""), version=V2)
+
+
+@write.post("/demo/alerts/trigger")
+def demo_alerts_trigger(body: s.AlertTriggerBody, corr: Optional[str] = Depends(correlation_header),
+                        service: DoorstepService = Depends(svc)):
+    st = service.alerts.feed.trigger(body.action, preset=body.preset, zone_id=body.zone_id, status=body.status,
+                                     event_type=body.event_type, geometry=body.geometry,
+                                     expires_in_minutes=body.expires_in_minutes,
+                                     freeze_age_minutes=body.freeze_age_minutes)
+    poll = None
+    if body.poll_now:
+        from doorstep.models import utc_now_iso
+
+        poll = service.alerts.ingest(source_id="SYNTHETIC_CALOES", source_type="OFFICIAL_SIMULATION",
+                                     url="/demo/feeds/caloes", fetched_at=utc_now_iso(), fetch_ok=True,
+                                     http_status=200, error=None, payload=service.alerts.feed.render_caloes(),
+                                     idempotency_key=f"SYNTHETIC_CALOES:poll_now:v{st.version}",
+                                     correlation_id=pick(corr, body) or "")
+    return out({"action": body.action, "feed_version": st.version, "synthetic_feed_url": "/demo/feeds/caloes",
+                "frozen": st.frozen_at_ms is not None, "poll_result": poll}, version=V2)
+
+
+@write.post("/alerts/{alert_id}/outreach", dependencies=[Depends(require_agent_token)])
+def alert_outreach_start(alert_id: str, body: s.OutreachBody, corr: Optional[str] = Depends(correlation_header),
+                         service: DoorstepService = Depends(svc)):
+    return out(service.alerts.start_outreach(alert_id, body.idempotency_key, body.max_orgs,
+                                             pick(corr, body) or ""), version=V2)
+
+
+@write.post("/sim/outreach/{alert_id}/deadline")
+def sim_outreach_deadline(alert_id: str, service: DoorstepService = Depends(svc)):
+    return out(service.alerts.outreach_deadline(alert_id), version=V2)
+
+
+@write.post("/cases/{case_id}/recovery")
+def case_recovery(case_id: str, body: s.RecoveryV2Body, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    view, created = service.recovery.request(
+        case_id, share_recovery_needs=body.consent.share_recovery_needs, granted_by=body.consent.granted_by,
+        granted_at=body.consent.granted_at, help_types=body.help_types, idempotency_key=body.idempotency_key,
+        correlation_id=pick(corr, body))
+    return out(view, 201 if created else 200, V2)
+
+
+@write.post("/recovery/{referral_id}/respond", dependencies=[Depends(require_agent_token)])
+def recovery_respond(referral_id: str, body: s.RecoveryRespondBody, corr: Optional[str] = Depends(correlation_header),
+                     service: DoorstepService = Depends(svc)):
+    return out(service.recovery.respond(referral_id, org_id=body.org_id, decision=body.decision,
+                                        evidence=body.evidence, idempotency_key=body.idempotency_key,
+                                        correlation_id=pick(corr, body)), version=V2)
+
+
+@write.post("/matches/propose")
+def matches_propose(body: s.ProposeMatchBody, corr: Optional[str] = Depends(correlation_header),
+                    service: DoorstepService = Depends(svc)):
+    sel = body.select or s.MatchSelect()
+    view, created = service.matching.propose(
+        body.case_id, idempotency_key=body.idempotency_key, create_proposal=body.create_proposal,
+        authorization=body.authorization, select_volunteer=sel.volunteer_id, select_site=sel.site_id,
+        correlation_id=pick(corr, body))
+    return out(view, 201 if created else 200, V2)
+
+
+@write.post("/assignments/{assignment_id}/accept", dependencies=[Depends(require_agent_token)])
+def assignment_accept(assignment_id: str, body: s.AcceptV2Body, corr: Optional[str] = Depends(correlation_header),
+                      service: DoorstepService = Depends(svc)):
+    return out(service.matching.accept(
+        assignment_id, org_id=body.org_id, volunteer_id=body.volunteer_id, site_id=body.site_id,
+        decision=body.decision, idempotency_key=body.idempotency_key, correlation_id=pick(corr, body)), version=V2)
+
+
+@write.post("/cases/{case_id}/escalate")
+def case_escalate(case_id: str, body: s.EscalateBody, corr: Optional[str] = Depends(correlation_header),
+                  service: DoorstepService = Depends(svc)):
+    view, created = service.matching.escalate(case_id, body.reason, idempotency_key=body.idempotency_key,
+                                              correlation_id=pick(corr, body))
+    return out(view, 201 if created else 200, V2)
+
+
+@write.post("/escalations/{escalation_id}/ack")
+def escalation_ack(escalation_id: str, body: s.EscalationAckBodyV2, corr: Optional[str] = Depends(correlation_header),
+                   service: DoorstepService = Depends(svc)):
+    return out(service.matching.acknowledge(escalation_id, body.status,
+                                            recipient_agent_address=body.recipient_agent_address,
+                                            idempotency_key=body.idempotency_key,
+                                            correlation_id=pick(corr, body)), version=V2)
 
 
 # ------------------------------------------------- message simulator (B extras)

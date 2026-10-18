@@ -2,7 +2,8 @@
 
 * ``doorstep_users``: residents and operational data (cases, messages,
   assignments, alerts, events, ...).
-* ``doorstep_orgs``: organizations / provider registry and provider events.
+* ``doorstep_partners``: canonical organizations, location-first ``regions``
+  (area -> orgs -> local volunteers), agent registry, provider events.
 
 Tests and the offline smoke test use ``mongomock`` (same API, in memory).
 Atomicity comes from single-document operations: unique indexes,
@@ -23,11 +24,12 @@ from pymongo import ASCENDING, ReturnDocument
 from pymongo.collection import Collection
 
 # Collections that live in the organizations database; everything else is users/operational.
-ORG_COLLECTIONS = {"organizations", "provider_registry", "provider_events"}
+ORG_COLLECTIONS = {"organizations", "regions", "agents", "provider_registry", "provider_events"}
 
 USERS_COLLECTIONS = [
     "residents", "cases", "alerts", "service_requests", "offers", "assignments", "verifications",
     "messages", "escalations", "referrals", "consent_grants", "events", "settings", "counters",
+    "zone_alerts", "feeds", "ingests", "checkins", "synthetic_feed", "match_results",
 ]
 
 
@@ -60,7 +62,9 @@ class Database:
             client = _make_client(uri, use_mock)
         self.client = client
         self.users = client[users_db or os.environ.get("MONGODB_USERS_DB", "doorstep_users")]
-        self.orgs = client[orgs_db or os.environ.get("MONGODB_ORGS_DB", "doorstep_orgs")]
+        self.orgs = client[orgs_db or os.environ.get("MONGODB_PARTNERS_DB")
+                           or os.environ.get("MONGODB_ORGS_DB") or "doorstep_partners"]
+        self.partners = self.orgs  # plan rev 3 name
         self._lock = threading.RLock()
         self._ensure_indexes()
 
@@ -130,7 +134,7 @@ class Database:
 
     def ping(self) -> dict[str, str]:
         out = {}
-        for label, db in (("users", self.users), ("orgs", self.orgs)):
+        for label, db in (("users", self.users), ("partners", self.orgs)):
             try:
                 db.command("ping")
                 out[label] = "ok"

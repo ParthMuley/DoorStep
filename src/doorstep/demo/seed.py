@@ -12,12 +12,14 @@ from datetime import datetime, timedelta, timezone
 from doorstep.models import (
     Address,
     EmergencyContact,
-    Location,
     Organization,
     ProviderRegistration,
+    Region,
+    RegionOrg,
     ResidentProfile,
     ShelterSite,
     Volunteer,
+    point,
 )
 
 # Deterministic case ids per resident (so reset_demo.sh reproduces state).
@@ -61,74 +63,86 @@ def residents() -> list[ResidentProfile]:
     ]
 
 
-def _vol(vid, name, phone, label, lat, lon, vehicle, seats, wc, pets, caps, approved=True) -> Volunteer:
-    return Volunteer(volunteer_id=vid, name=name, phone=phone, address=Address(label=label, lat=lat, lon=lon),
-                     vehicle_type=vehicle, vehicle_seats=seats, wheelchair_spaces=wc, pet_capacity=pets,
-                     needs_they_can_cater=caps, approved=approved)
+def _rect(min_lon: float, min_lat: float, max_lon: float, max_lat: float) -> dict:
+    return {"type": "Polygon", "coordinates": [[[min_lon, min_lat], [max_lon, min_lat], [max_lon, max_lat],
+                                                [min_lon, max_lat], [min_lon, min_lat]]]}
+
+
+def _vol(vid, name, phone, lat, lon, vehicle, seats, wc, pets, caps, approved=True) -> Volunteer:
+    return Volunteer(volunteer_id=vid, name=name, phone=phone, location=point(lat, lon), vehicle_type=vehicle,
+                     vehicle_seats=seats, wheelchair_spaces=wc, pet_capacity=pets, needs_they_can_cater=caps,
+                     approved=approved)
 
 
 def organizations() -> list[Organization]:
-    """Contract v2.0 §10: each org carries its own volunteers (the team's document shape)."""
+    """Canonical org records (contract v2.1 §10). Volunteers live in regions()."""
     return [
-        Organization(
-            org_id="eastside_rides_demo", name="Eastside Accessible Rides (fictional)",
-            location=Location(label="SYNTHETIC: Zone 2 depot", lat=34.0950, lon=-118.1100),
-            calamity_types=["WILDFIRE"], services=["TRANSPORT"], approved=True, service_radius_km=20,
-            volunteers=[_vol("volunteer_sarah", "Sarah (synthetic)", "sim_phone_sarah", "SYNTHETIC: Zone 2",
-                             34.0950, -118.1100, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4, 7])],
-        ),
-        Organization(
-            org_id="neighbor_sedans_demo", name="Neighborhood Sedan Volunteers (fictional)",
-            location=Location(label="SYNTHETIC: Zone 3 Sector B", lat=34.1005, lon=-118.0970),
-            calamity_types=["WILDFIRE"], services=["TRANSPORT"], approved=True, service_radius_km=10,
-            # Closest to Maria, but a sedan with no wheelchair space: the "closer but unsuitable" rejection.
-            volunteers=[_vol("volunteer_joe", "Joe (synthetic)", "sim_phone_joe", "SYNTHETIC: Zone 3 Sector B",
-                             34.1005, -118.0970, "SEDAN", 3, 0, 1, [4, 7])],
-        ),
-        Organization(
-            org_id="red_cross_demo", name="Red Cross (fictional demo chapter)",
-            location=Location(label="SYNTHETIC: Culver City", lat=34.0210, lon=-118.3960),
-            calamity_types=["WILDFIRE", "FLOOD", "EARTHQUAKE"],
-            services=["TRANSPORT", "SHELTER", "RECOVERY_HOUSING", "INSURANCE_GUIDANCE"],
-            approved=True, service_radius_km=40,
-            volunteers=[
-                _vol("volunteer_maya", "Maya (synthetic)", "sim_phone_maya", "SYNTHETIC: Zone 4",
-                     34.0800, -118.1200, "MINIVAN", 4, 0, 1, [2, 4, 7, 8]),
-                # Eligible alternate for Maria if Sarah declines.
-                _vol("volunteer_lee", "Lee (synthetic)", "sim_phone_lee", "SYNTHETIC: Zone 5",
-                     34.0700, -118.1400, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4, 5]),
-            ],
-            shelter_sites=[ShelterSite(site_id="rc_shelter_1", name="Red Cross Shelter (fictional)",
-                                       lat=34.0300, lon=-118.3800, beds_available=30, features=[6, 4, 5])],
-            recovery_services=["TEMPORARY_HOUSING", "INSURANCE_GUIDANCE"],
-        ),
-        Organization(
-            org_id="unlisted_vans_demo", name="Unlisted Van Group (fictional)",
-            location=Location(label="SYNTHETIC: Zone 2", lat=34.0980, lon=-118.1050),
-            calamity_types=["WILDFIRE"], services=["TRANSPORT"], approved=False, service_radius_km=20,
-            volunteers=[_vol("volunteer_tom", "Tom (synthetic)", "sim_phone_tom", "SYNTHETIC: Zone 2",
-                             34.0980, -118.1050, "WHEELCHAIR_VAN", 2, 1, 2, [1, 2, 4], approved=False)],
-        ),
-        Organization(
-            org_id="flood_only_demo", name="Flood Boats Collective (fictional)",
-            location=Location(label="SYNTHETIC: Zone 4", lat=34.0900, lon=-118.1000),
-            calamity_types=["FLOOD"], services=["TRANSPORT"], approved=True, service_radius_km=20,
-            volunteers=[_vol("volunteer_rina", "Rina (synthetic)", "sim_phone_rina", "SYNTHETIC: Zone 4",
-                             34.0900, -118.1000, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4])],
-        ),
-        Organization(
-            org_id="civic_shelter_demo", name="Civic Center Shelter (fictional)",
-            location=Location(label="SYNTHETIC: Zone 5 civic center", lat=34.0890, lon=-118.0700),
-            calamity_types=["ANY"], services=["SHELTER"], approved=True, service_radius_km=30,
-            shelter_sites=[ShelterSite(site_id="dest_center_a", name="Civic Center (fictional)",
-                                       lat=34.0890, lon=-118.0700, beds_available=12, features=[3, 4, 5, 6])],
-        ),
-        Organization(
-            org_id="recovery_housing_demo", name="Recovery Housing Partners (fictional)",
-            location=Location(label="SYNTHETIC: Zone 6", lat=34.0600, lon=-118.0800),
-            calamity_types=["ANY"], services=["RECOVERY_HOUSING"], approved=True, service_radius_km=50,
-            recovery_services=["TEMPORARY_HOUSING"],
-        ),
+        Organization(org_id="eastside_rides_demo", name="Eastside Accessible Rides (fictional)",
+                     calamity_types=["WILDFIRE"], services=["TRANSPORT"], approved=True, service_radius_km=20),
+        Organization(org_id="neighbor_sedans_demo", name="Neighborhood Sedan Volunteers (fictional)",
+                     calamity_types=["WILDFIRE"], services=["TRANSPORT"], approved=True, service_radius_km=10),
+        Organization(org_id="red_cross_demo", name="Red Cross (fictional demo chapter)",
+                     calamity_types=["WILDFIRE", "FLOOD", "EARTHQUAKE"],
+                     services=["TRANSPORT", "SHELTER", "RECOVERY_HOUSING", "INSURANCE_GUIDANCE"],
+                     approved=True, service_radius_km=40, recovery_services=["TEMPORARY_HOUSING", "INSURANCE_GUIDANCE"]),
+        Organization(org_id="unlisted_vans_demo", name="Unlisted Van Group (fictional)",
+                     calamity_types=["WILDFIRE"], services=["TRANSPORT"], approved=False, service_radius_km=20),
+        Organization(org_id="flood_only_demo", name="Flood Boats Collective (fictional)",
+                     calamity_types=["FLOOD"], services=["TRANSPORT"], approved=True, service_radius_km=20),
+        Organization(org_id="civic_shelter_demo", name="Civic Center Shelter (fictional)",
+                     calamity_types=["ANY"], services=["SHELTER"], approved=True, service_radius_km=30),
+        Organization(org_id="recovery_housing_demo", name="Recovery Housing Partners (fictional)",
+                     calamity_types=["ANY"], services=["RECOVERY_HOUSING"], approved=True, service_radius_km=50,
+                     recovery_services=["TEMPORARY_HOUSING"]),
+    ]
+
+
+def regions() -> list[Region]:
+    """Location-first partner data (plan rev 3): area -> orgs -> only their local volunteers/sites."""
+    orgs = {o.org_id: o for o in organizations()}
+
+    def entry(org_id: str, volunteers=(), sites=()) -> RegionOrg:
+        return RegionOrg.from_org(orgs[org_id]).model_copy(
+            update={"volunteers": list(volunteers), "shelter_sites": list(sites)})
+
+    return [
+        Region(region_id="la_county:east_valley", label="East Valley (synthetic)", center=point(34.098, -118.095),
+               area=_rect(-118.130, 34.075, -118.060, 34.120), orgs=[
+                   entry("eastside_rides_demo", [_vol("volunteer_sarah", "Sarah (synthetic)", "sim_phone_sarah",
+                                                      34.0950, -118.1100, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4, 7])]),
+                   # Closest to Maria, but a sedan with no wheelchair space: the "closer but unsuitable" rejection.
+                   entry("neighbor_sedans_demo", [_vol("volunteer_joe", "Joe (synthetic)", "sim_phone_joe",
+                                                       34.1005, -118.0970, "SEDAN", 3, 0, 1, [4, 7])]),
+                   entry("red_cross_demo", [_vol("volunteer_maya", "Maya (synthetic)", "sim_phone_maya",
+                                                 34.0800, -118.1200, "MINIVAN", 4, 0, 1, [2, 4, 7, 8])]),
+                   entry("unlisted_vans_demo", [_vol("volunteer_tom", "Tom (synthetic)", "sim_phone_tom",
+                                                     34.0980, -118.1050, "WHEELCHAIR_VAN", 2, 1, 2, [1, 2, 4],
+                                                     approved=False)]),
+                   entry("flood_only_demo", [_vol("volunteer_rina", "Rina (synthetic)", "sim_phone_rina",
+                                                  34.0900, -118.1000, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4])]),
+                   entry("civic_shelter_demo", sites=[ShelterSite(site_id="dest_center_a", name="Civic Center (fictional)",
+                                                                  location=point(34.0890, -118.0700), beds_available=12,
+                                                                  features=[3, 4, 5, 6])]),
+               ]),
+        Region(region_id="la_county:south_valley", label="South Valley (synthetic)", center=point(34.058, -118.110),
+               area=_rect(-118.160, 34.040, -118.060, 34.075), orgs=[
+                   # Eligible alternate for Maria if Sarah declines.
+                   entry("red_cross_demo", [_vol("volunteer_lee", "Lee (synthetic)", "sim_phone_lee",
+                                                 34.0700, -118.1400, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4, 5])]),
+                   entry("recovery_housing_demo"),
+               ]),
+        Region(region_id="la_county:westside", label="Westside (synthetic)", center=point(34.020, -118.400),
+               area=_rect(-118.450, 33.980, -118.350, 34.060), orgs=[
+                   entry("red_cross_demo", sites=[ShelterSite(site_id="rc_shelter_1", name="Red Cross Shelter (fictional)",
+                                                              location=point(34.0300, -118.3800), beds_available=30,
+                                                              features=[4, 5, 6])]),
+               ]),
+        # San Francisco: an org's far-away volunteers are never contacted for an LA fire.
+        Region(region_id="sf:mission", label="SF Mission (synthetic)", center=point(37.755, -122.420),
+               area=_rect(-122.440, 37.740, -122.400, 37.770), orgs=[
+                   entry("red_cross_demo", [_vol("volunteer_sam", "Sam (synthetic)", "sim_phone_sam",
+                                                 37.7600, -122.4200, "WHEELCHAIR_VAN", 2, 1, 1, [1, 2, 4])]),
+               ]),
     ]
 
 

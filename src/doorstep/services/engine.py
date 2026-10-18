@@ -59,6 +59,9 @@ from .errors import (
 )
 from .event_log import EventLog
 from .registry import RegistryService
+from .alerts import AlertService
+from .matching_v2 import MatchService
+from .recovery_v2 import RecoveryService
 from .safety_rules import ROUTE_DISCLAIMER, assignment_safety_violations, zone_rule
 from .store import Store
 from .transitions import (
@@ -86,6 +89,10 @@ class DoorstepService:
         self.sim = MessageSimulator(db, self.store)
         self.registry = RegistryService(db, self.store, self.events)
         self.graph = graph or build_demo_graph()
+        self.alerts = AlertService(self)
+        self.matching = MatchService(self)
+        self.recovery = RecoveryService(self)
+        self.registry.zone_lookup = self.alerts.zone_status_label
 
     # ================================================================ demo
     def reset(self) -> dict[str, Any]:
@@ -94,16 +101,19 @@ class DoorstepService:
         self.graph = build_demo_graph()
         with self.db.tx():
             for o in seed.organizations():
-                self.store.save_organization(o)
+                self.store.partners.save_org(o)
+            for r in seed.regions():
+                self.store.partners.save_region(r)
             for r in seed.residents():
                 self.store.save_resident_profile(r, legacy_sector=seed.LEGACY_SECTORS.get(r.resident_id))
             for p in seed.provider_registry():
                 self.store.save_registration(p)
             self.db.set_setting("escalation_ack", "true")
             self.events.append("DEMO_RESET", case_id=None, data={"simulated": True})
-        orgs = seed.organizations()
-        return {"status": "reset", "residents": len(seed.residents()), "organizations": len(orgs),
-                "volunteers": sum(len(o.volunteers) for o in orgs), "simulated": True}
+        regions = seed.regions()
+        return {"status": "reset", "residents": len(seed.residents()), "organizations": len(seed.organizations()),
+                "regions": len(regions), "volunteers": sum(len(o.volunteers) for r in regions for o in r.orgs),
+                "simulated": True}
 
     def set_escalation_ack(self, acknowledge: bool) -> dict[str, Any]:
         self.db.set_setting("escalation_ack", "true" if acknowledge else "false")
@@ -163,9 +173,19 @@ class DoorstepService:
                            data={"message_id": msg.message_id, "template_id": template_id, "simulated": True})
         return msg
 
+    def _destination_label(self, destination: Assignment) -> str:
+        if destination.site_id:
+            found = self.store.partners.locate_site(destination.site_id)
+            if found:
+                return found[2].name
+        return self._provider_name(destination.provider_id)
+
     def _provider_name(self, provider_id: str) -> str:
         reg = self.store.get_registration(provider_id)
-        return reg.display_name if reg else provider_id
+        if reg:
+            return reg.display_name
+        org = self.store.partners.find_org(provider_id)
+        return org.name if org else provider_id
 
     def _party_for_role(self, resident: Resident, granted_by: str) -> str:
         """Map RESIDENT/CAREGIVER (or a direct id) to the party id."""
@@ -277,7 +297,15 @@ class DoorstepService:
             actor = "caregiver" if sender != resident.contact_channel else "resident"
             intent = parsed.intent
 
-            if intent == ResponseIntent.CONFIRM_YES:
+            if intent == ResponseIntent.PICKUP_CONFIRMED:
+                self._record_resident_pickup(case, resident, sender, corr)
+            elif intent in (ResponseIntent.CONFIRM_YES, ResponseIntent.CONFIRM_NO) \
+                    and case.pending_candidate_needs is None and case.resident_status == R.ARRIVAL_CONFIRMED:
+                # Reply to the arrival message's "share your needs for further help?" question.
+                party = resident.resident_id if actor == "resident" else (
+                    resident.caregiver.caregiver_id if resident.caregiver else resident.resident_id)
+                self.recovery.sms_reply_after_arrival(case, resident, party, intent == ResponseIntent.CONFIRM_YES, corr)
+            elif intent == ResponseIntent.CONFIRM_YES:
                 if case.pending_candidate_needs is not None:
                     self._confirm(case, case.pending_candidate_needs, actor, corr)
                 else:
@@ -314,6 +342,22 @@ class DoorstepService:
         return {**self._response_view(case, corr), "response_id": msg.message_id, "original_text": text,
                 "intent": parsed.intent.value, "candidate_needs": candidates,
                 "confirmation_question": question, "duplicate": False}
+
+    def _record_resident_pickup(self, case: Case, resident: Resident, sender: str, corr: str) -> None:
+        """Resident side of pickup (A's review item 5). Only counts while a volunteer is ACCEPTED."""
+        a = self.store.accepted_assignment(case.case_id, TRANSPORT)
+        if a is None or a.status != S.ACCEPTED or a.confirmed_pickup_at:
+            self.events.append("PICKUP_CONFIRMATION_IGNORED", case_id=case.case_id, correlation_id=corr,
+                               data={"reason": "NO_ACCEPTED_TRANSPORT_AWAITING_PICKUP"})
+            return
+        party = resident.resident_id if sender == resident.contact_channel else (
+            resident.caregiver.caregiver_id if resident.caregiver else sender)
+        a.resident_pickup_confirmed_at = utc_now_iso()
+        a.resident_pickup_confirmed_by = party
+        self.store.save_assignment(a)
+        self.events.append("RESIDENT_PICKUP_CONFIRMED", case_id=case.case_id, correlation_id=corr,
+                           data={"assignment_id": a.assignment_id, "party": party})
+        case.next_step = "Resident confirmed pickup; awaiting the volunteer's pickup report."
 
     def _response_view(self, case: Case, corr: str) -> dict[str, Any]:
         view = {"case_id": case.case_id, "needs_confirmed": case.needs_confirmed,
@@ -643,7 +687,10 @@ class DoorstepService:
                                       reason="transport provider accepted", correlation_id=corr)
             self.events.append("PICKUP_DETAILS_RELEASED", case_id=a.case_id, correlation_id=corr,
                                actor=a.provider_id, data={"assignment_id": a.assignment_id})
-            self._message_resident(case, "provider_accepted", corr, provider=name)
+            if a.volunteer_id:  # contract v2: a registered volunteer accepted
+                self._message_resident(case, "help_on_the_way", corr, eta=str(a.eta_minutes or "?"))
+            else:
+                self._message_resident(case, "provider_accepted", corr, provider=name)
             dest = self.store.accepted_assignment(a.case_id, DESTINATION)
             case.next_step = ("Awaiting pickup confirmation." if dest
                               else "Transport accepted; destination acceptance still needed before arrival.")
@@ -794,8 +841,12 @@ class DoorstepService:
                                      "evidence": evidence.type, "party_ids_verified": ids_verified})
             self._set_resident_status(case, R.ARRIVAL_CONFIRMED, assignment=a, reason="arrival evidence recorded",
                                       correlation_id=corr)
+            if a.volunteer_id:  # free the volunteer for other cases
+                self.store.partners.release_volunteer(a.volunteer_id, case.case_id)
+                self.events.append("VOLUNTEER_RELEASED", case_id=case.case_id, correlation_id=corr,
+                                   data={"org_id": a.provider_id, "volunteer_id": a.volunteer_id})
             self._message_resident(case, "arrival_confirmed", corr,
-                                   destination=self._provider_name(destination.provider_id))
+                                   destination=self._destination_label(destination))
             case.next_step = "Ask resident for consent before any recovery-support referral."
             self._save_case(case)
         return self._evidence_view(a, case, corr, False)
@@ -944,6 +995,9 @@ class DoorstepService:
                         None)
         case = self.store.case_for_resident(resident.resident_id) if resident else None
         if case is None:
+            found = self.alerts.volunteer_by_phone(sender)
+            if found:  # a volunteer answering outreach (YES/NO)
+                return self.alerts.volunteer_reply(found, text, external_id)
             self.events.append("UNKNOWN_SENDER_REJECTED", case_id=None, data={"sender_known": False})
             raise Unauthorized("Unknown sender; no case updated", reasons=["UNKNOWN_SENDER"])
         return self.submit_resident_response(case.case_id, text, language, sender=sender, external_id=external_id)
@@ -993,7 +1047,7 @@ class DoorstepService:
         referrals = self.store.referrals_for_case(case_id)
         transport = self.store.accepted_assignment(case_id, TRANSPORT)
         pending_transport = next((a for a in reversed(self.store.assignments_for_case(case_id, TRANSPORT))
-                                  if a.status == S.AWAITING_PROVIDER), None)
+                                  if a.status in (S.AWAITING_PROVIDER, S.PROPOSED)), None)
         shown = transport or pending_transport
         destination = self.store.accepted_assignment(case_id, DESTINATION)
         color, label = map_color(case.resident_status)
@@ -1015,7 +1069,11 @@ class DoorstepService:
             "active_assignment": None if shown is None else {
                 "assignment_id": shown.assignment_id, "provider_id": shown.provider_id,
                 "service_status": shown.status, "confirmed_pickup_at": shown.confirmed_pickup_at,
-                "confirmed_arrival_at": shown.confirmed_arrival_at},
+                "confirmed_arrival_at": shown.confirmed_arrival_at,
+                **({"org_id": shown.provider_id, "volunteer_id": shown.volunteer_id,
+                    "vehicle_type": shown.vehicle_type, "assignment_status": shown.status,
+                    "eta": {"minutes": shown.eta_minutes, "label": "Illustrative estimate, not a guarantee"}}
+                   if shown.volunteer_id else {})},
             "escalations": [{"escalation_id": e.escalation_id, "reason": e.reason, "status": e.status,
                              "assistance_confirmed": False} for e in escalations],
             "referrals": [{"referral_id": r.referral_id, "status": r.status,
@@ -1023,11 +1081,14 @@ class DoorstepService:
             "timeline": [self._timeline_item(e) for e in self.events.for_case(case_id)],
             "correlation_id": corr,
             # --- additions beyond contract v1.0 (safe to ignore) ---
+            **self._zone_view(case.resident_id),
+            "recovery": self.recovery.case_view(case.case_id),
+            "alert_id": case.alert_id,
             "sector_id": case.sector_id,
             "needs": case.needs.model_dump(),
             "destination_assignment": None if destination is None else {
                 "assignment_id": destination.assignment_id, "provider_id": destination.provider_id,
-                "service_status": destination.status},
+                "service_status": destination.status, "site_id": destination.site_id},
             "map": {"color": color, "label": label},
             "unresolved": unresolved,
             "next_step": case.next_step,
@@ -1042,6 +1103,13 @@ class DoorstepService:
         }
         view["summary_text"] = self._summary_text(view, transport, destination, escalations, referrals)
         return view
+
+    def _zone_view(self, resident_id: str) -> dict[str, Any]:
+        profile = self.store.find_resident_profile(resident_id)
+        if profile is None:
+            return {"zone_status": "UNKNOWN", "zone_sources": []}
+        zone = self.alerts.zone_for(profile)
+        return {"zone_status": zone["zone_status"], "zone_sources": zone["zone_sources"]}
 
     @staticmethod
     def _timeline_item(e) -> dict[str, Any]:

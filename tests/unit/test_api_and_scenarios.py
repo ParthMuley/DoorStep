@@ -15,7 +15,7 @@ def test_health_and_reads_are_public(client):
     client.headers.pop("Authorization")
     health = client.get("/health").json()
     assert health["status"] == "ok" and health["simulation_mode"] is True
-    assert health["databases"] == {"users": "ok", "orgs": "ok"}
+    assert health["databases"] == {"users": "ok", "partners": "ok"}
     assert client.get("/cases").status_code == 200
 
 
@@ -106,6 +106,6 @@ def test_two_databases_are_used():
     svc = DoorstepService(Database(client=client))
     svc.reset()
     maria_accepted(svc)
-    assert set(client["doorstep_orgs"].list_collection_names()) >= {"provider_registry", "organizations"}
+    assert set(client["doorstep_partners"].list_collection_names()) >= {"provider_registry", "organizations", "regions"}
     assert "provider_registry" not in client["doorstep_users"].list_collection_names()
     assert {"residents", "cases", "assignments", "events"} <= set(client["doorstep_users"].list_collection_names())

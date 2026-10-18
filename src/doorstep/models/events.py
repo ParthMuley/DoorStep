@@ -79,8 +79,14 @@ class Evidence(DoorstepModel):
     ``confirmations`` (party ids) is optional; when present every id is checked.
     """
 
-    type: str  # PROVIDER_AND_RESIDENT_CONFIRMATION | DESTINATION_CHECKIN
+    type: str  # v1: PROVIDER_AND_RESIDENT_CONFIRMATION | DESTINATION_CHECKIN
+    #            v2: VOLUNTEER_AND_RESIDENT_CONFIRMATION | SHELTER_CHECKIN
     provider_confirmed: bool = False
+    volunteer_confirmed: bool = False
+    shelter_confirmed: bool = False
+    shelter_org_id: Optional[str] = None
+    site_id: Optional[str] = None
+    report_id: Optional[str] = None
     resident_confirmed: bool = False
     caregiver_confirmed: bool = False
     code_verified: bool = False
@@ -124,7 +130,11 @@ class RecoveryReferral(DoorstepModel):
     schema_version: str = SCHEMA_VERSION
     referral_id: str = Field(default_factory=lambda: new_id("ref"))
     case_id: str
-    provider_id: str = "recovery_org_demo"
+    provider_id: str = "recovery_org_demo"  # v2: the recovery org_id
+    help_type: Optional[str] = None         # v2: TEMPORARY_HOUSING, INSURANCE_GUIDANCE, ...
+    region_id: Optional[str] = None
+    distance_km: Optional[float] = None
+    evidence: Optional[dict[str, Any]] = None  # required for COMPLETED
     status: ReferralStatus = ReferralStatus.REQUESTED
     # Exactly what was shared with the recovery provider (and nothing more).
     shared_fields: dict[str, Any] = Field(default_factory=dict)

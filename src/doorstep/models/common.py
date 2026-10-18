@@ -112,12 +112,15 @@ class ResponseIntent(str, Enum):
     CALL_ME = "CALL_ME"
     CONFIRM_YES = "CONFIRM_YES"
     CONFIRM_NO = "CONFIRM_NO"
+    PICKUP_CONFIRMED = "PICKUP_CONFIRMED"  # resident/caregiver texts PICKED UP / RECOGIDO
     UNPARSED = "UNPARSED"
 
 
 class EvidenceParty(str, Enum):
     RESIDENT = "resident"
     CAREGIVER = "caregiver"
+    VOLUNTEER = "volunteer"
+    SHELTER = "shelter"
     TRANSPORT_PROVIDER = "transport_provider"
     DESTINATION_PROVIDER = "destination_provider"
 
@@ -127,13 +130,18 @@ class EscalationReason(str, Enum):
     NO_ELIGIBLE_PROVIDER = "NO_ELIGIBLE_PROVIDER"
     PROVIDER_TIMEOUT = "PROVIDER_TIMEOUT"
     NO_REPLY_AFTER_DEADLINE = "NO_REPLY_AFTER_DEADLINE"
+    NO_AVAILABLE_VOLUNTEER = "NO_AVAILABLE_VOLUNTEER"
+    NO_SUITABLE_VOLUNTEER = "NO_SUITABLE_VOLUNTEER"
+    VOLUNTEER_TIMEOUT = "VOLUNTEER_TIMEOUT"
     COORDINATOR_REQUESTED = "COORDINATOR_REQUESTED"
 
 
 class ReferralStatus(str, Enum):
-    # A referral is NOT completed assistance.
+    # A referral is NOT completed assistance; COMPLETED needs evidence.
+    NOT_REQUESTED = "NOT_REQUESTED"
     REQUESTED = "REQUESTED"
     ACCEPTED = "ACCEPTED"
+    COMPLETED = "COMPLETED"
     UNRESOLVED = "UNRESOLVED"
 
 

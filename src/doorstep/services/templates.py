@@ -43,6 +43,34 @@ TEMPLATES: dict[str, dict[str, str]] = {
                "compartamos sus necesidades de accesibilidad con una organización de apoyo para "
                "solicitar ayuda con alojamiento temporal? Esto es una simulación."),
     },
+    "help_on_the_way": {
+        "en": ("DOORSTEP DEMO: A volunteer has accepted and is on the way (simulated). Estimated arrival about "
+               "{eta} minutes. This is an estimate, not a guarantee. This is a simulation."),
+        "es": ("DOORSTEP DEMO: Un voluntario aceptó y va en camino (simulado). Llegada estimada en unos {eta} "
+               "minutos. Es una estimación, no una garantía. Esto es una simulación."),
+    },
+    "recovery_requested": {
+        "en": ("DOORSTEP DEMO: We asked {org} about {help}. Only the details you agreed to share were sent. "
+               "Nothing is confirmed yet. This is a simulation."),
+        "es": ("DOORSTEP DEMO: Pedimos ayuda a {org} con {help}. Solo enviamos los datos que usted aceptó compartir. "
+               "Todavía no hay nada confirmado. Esto es una simulación."),
+    },
+    "recovery_accepted": {
+        "en": ("DOORSTEP DEMO: {org} accepted your request for help with {help}. This is not a confirmed "
+               "reservation or service yet. This is a simulation."),
+        "es": ("DOORSTEP DEMO: {org} aceptó su solicitud de ayuda con {help}. Todavía no es una reservación "
+               "ni un servicio confirmado. Esto es una simulación."),
+    },
+    "recovery_completed": {
+        "en": "DOORSTEP DEMO: {org} confirmed help with {help} (simulated reference {ref}). This is a simulation.",
+        "es": "DOORSTEP DEMO: {org} confirmó la ayuda con {help} (referencia simulada {ref}). Esto es una simulación.",
+    },
+    "volunteer_outreach": {
+        "en": ("DOORSTEP DEMO: A simulated {calamity} alert affects {zone}. {org} is asking: can you help "
+               "with accessible transport? Reply YES or NO. This is a simulation."),
+        "es": ("DOORSTEP DEMO: Una alerta simulada de {calamity} afecta {zone}. {org} pregunta: ¿puede ayudar "
+               "con transporte accesible? Responda SÍ o NO. Esto es una simulación."),
+    },
     "coordinator_followup": {
         "en": ("DOORSTEP DEMO: Assistance is NOT confirmed yet. Your request was passed to a coordinator "
                "for follow-up. For emergencies call 911. This is a simulation."),
