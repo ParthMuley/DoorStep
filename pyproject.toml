@@ -22,6 +22,7 @@ dependencies = [
     "pymongo>=4.6",
     "shapely>=2",
     "openai>=1.30",
+    "flexpolyline>=0.1.0",
 ]
 
 [project.optional-dependencies]

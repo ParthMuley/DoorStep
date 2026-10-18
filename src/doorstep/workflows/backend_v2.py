@@ -145,6 +145,21 @@ class DoorstepBackendV2(DoorstepBackend):
         return await self._request("POST", "/demo/closures/trigger", correlation_id, self._v2(
             correlation_id, action=action, road_name=road_name, headline=headline, body=body))
 
+    # ---- routes (Route agent; contract §5.10)
+    async def route_constraints(self, assignment_id: str, idempotency_key: str,
+                                correlation_id: str) -> dict[str, Any]:
+        return await self._request("POST", "/routes/constraints", correlation_id, self._v2(
+            correlation_id, assignment_id=assignment_id, idempotency_key=idempotency_key))
+
+    async def route_preview(self, route_request_id: str, polyline: dict[str, Any] | None, distance_m: int | None,
+                            duration_s: int | None, provider_notices: list[dict[str, Any]], computed_at: str,
+                            idempotency_key: str, correlation_id: str) -> dict[str, Any]:
+        body = {"schema_version": V2, "correlation_id": correlation_id, "route_request_id": route_request_id,
+                "provider": "HERE", "polyline": polyline, "distance_m": distance_m, "duration_s": duration_s,
+                "provider_notices": provider_notices, "computed_at": computed_at,
+                "idempotency_key": idempotency_key}
+        return await self._request("POST", "/routes/previews", correlation_id, body)
+
     # ---- card data
     async def dashboard_summary(self, correlation_id: str) -> dict[str, Any]:
         return await self._request("GET", "/dashboard/summary", correlation_id)

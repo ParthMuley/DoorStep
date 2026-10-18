@@ -110,3 +110,13 @@ The same journey ran live with **one Volunteer Network agent** instead of 5 org 
 - **Now on mailboxes:** Doorstep, Volunteer Network, Matching, Escalation, Post-Calamity, Calamity Checker (6 of the account's 8). `LOCAL_ONLY_AGENTS` is empty.
 - **The 2 remaining slots** are for the News and Route agents.
 - **Live journey probe:** 58 s end to end, every hop through Agentverse.
+
+## HERE Routing v8 (Route agent, verified 2026-10-18)
+
+Sources: [avoid areas](https://docs.here.com/routing/docs/routing-v8-avoid-area), [avoidance](https://docs.here.com/routing/docs/routing-v8-avoidance), [HERE blog: polygons for avoid areas](https://www.here.com/learn/blog/routing-supports-polygons-for-avoid-areas).
+
+- **Avoid-area syntax:** `avoid[areas]=polygon:lat,lng;lat,lng;...`, latitude first; several areas joined by `|`; `!exception=` is also supported.
+- **Limit:** **at most 20 polygons** per request (blog + SDK docs; 250 is the bounding-box figure). We refuse with `TOO_MANY_AVOID_AREAS` beyond `HERE_MAX_AVOID_POLYGONS` (20), never truncate. The per-polygon vertex limit isn't documented, so we cap at 20 vertices and only ever **enlarge** shapes (buffer outward → convex hull → minimum rotated rectangle), and check that the result still covers the real zone. The check is explicit code, not an `assert`.
+- **Violations:** a route that can't avoid an area carries the critical notice `violatedBlockedRoad`. If HERE finds no route, there is none (`noRouteFound`).
+- **Request:** `via=lat,lng` adds the pickup stop, and each leg is a `section` (the first leg's duration is the ETA to the resident). `return=polyline,summary,actions,instructions`; the polyline is decoded with HERE's `flexpolyline` (PyPI 0.1.0).
+- **Free tier:** tests never call HERE (`httpx.MockTransport`). Live, there is one call per accepted assignment, cached by idempotency key, with a daily cap (`HERE_MAX_CALLS_PER_DAY`, default 50; past it, `HERE_DAILY_CAP_REACHED`, no call). Without a key the agent returns `HERE_NOT_CONFIGURED` and makes no call.

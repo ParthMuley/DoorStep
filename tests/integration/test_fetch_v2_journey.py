@@ -17,10 +17,13 @@ from doorstep.agents.escalation import build_escalation_protocol
 from doorstep.agents.journey import Journey
 from doorstep.agents.matching import build_matching_protocol
 from doorstep.agents.news import NewsAgent
+from doorstep.agents.route import RouteAgent
+from doorstep.integrations.here_client import HereRouter
 from doorstep.agents.post_calamity import build_post_calamity_protocol
 from doorstep.agents.volunteer_network import build_network_protocol
 from tests.integration.conftest import make_agent, run_until
 from tests.integration.fake_v2_backend import make_v2_backend, network_client
+from tests.integration.test_route import GOOD, FakeHere, here_response
 
 
 def chat(text: str) -> ChatMessage:
@@ -47,8 +50,8 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
     doorstep = make_agent("doorstep")
     doorstep.include(coordinator.chat_proto)
     doorstep.include(coordinator.journey_proto)
-    network, matching, escalation, post, calamity, news = (
-        make_agent(n) for n in ("network", "matching", "escalation", "post", "calamity", "news"))
+    network, matching, escalation, post, calamity, news, route = (
+        make_agent(n) for n in ("network", "matching", "escalation", "post", "calamity", "news", "route"))
     user = make_agent("asi_one_user")
 
     backend, _ = make_v2_backend(monkeypatch)
@@ -63,8 +66,10 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
 
     calamity.include(CalamityChecker(lambda: backend, fetch, coordinator_address=lambda: doorstep.address).protocol(3600))
     news.include(NewsAgent(lambda: backend, coordinator_address=lambda: doorstep.address).protocol(3600))
+    here = FakeHere(here_response(GOOD))  # HERE is mocked: no paid calls in tests
+    route.include(RouteAgent(lambda: backend, HereRouter(api_key="test-key", transport=here.transport)).protocol())
     for role, a in (("MATCHING", matching), ("ESCALATION", escalation), ("POSTCALAMITY", post),
-                    ("CALAMITY", calamity), ("NETWORK", network), ("NEWS", news)):
+                    ("CALAMITY", calamity), ("NETWORK", network), ("NEWS", news), ("ROUTE", route)):
         monkeypatch.setenv(f"{role}_AGENT_ADDRESS", a.address)
     monkeypatch.setattr(coordinator, "get_v2_backend", lambda: backend)
     monkeypatch.setattr(coordinator, "journey", Journey(lambda: backend, coordinator.address_for))
@@ -90,7 +95,7 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
             seen["roads"] = await say(ctx, "Show road conditions")
             seen["reply"] = await say(ctx, "Simulate Maria's reply")
             seen["match"] = await say(ctx, "Find a match for Maria")
-            seen["approved"] = await say(ctx, primary_selection(card(seen["match"][0])))
+            seen["approved"] = await say(ctx, primary_selection(card(seen["match"][0])), expect=2)
             seen["pickup"] = await say(ctx, primary_selection(card(seen["approved"][0])))
             seen["arrival"] = await say(ctx, "Confirm arrival for Maria", expect=2)
             seen["recovery"] = await say(ctx, primary_selection(card(seen["arrival"][1])))
@@ -100,7 +105,7 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
         finally:
             done.set()
 
-    await run_until([doorstep, user, network, matching, escalation, post, calamity, news], done, timeout=120)
+    await run_until([doorstep, user, network, matching, escalation, post, calamity, news, route], done, timeout=120)
 
     titles = {(card(m) or {}).get("title", text(m)) for m in seen["start"]}
     assert any("Alert detected" in t for t in titles)
@@ -120,6 +125,11 @@ async def test_full_v2_journey_from_asi_one(monkeypatch):
     approved = card(seen["approved"][0])
     assert "Help on the way" in approved["title"] and "estimate, not a guarantee" in text(seen["approved"][0])
     assert "SYNTHETIC: Zone 3 Sector B meeting point" not in text(seen["approved"][0])  # pickup point stays private
+    route_text = text(seen["approved"][1])
+    assert "Route for volunteer_sarah" in (card(seen["approved"][1]) or {}).get("title", "")
+    assert "ILLUSTRATIVE_ONLY" in route_text and "ORDER_ZONE" in route_text and "OFFICIAL_CLOSURE" in route_text
+    assert "unverified report on the path" in route_text and "safe" not in route_text.lower()
+    assert len(here.calls) == 1
 
     assert "Resident status: PICKUP_CONFIRMED" in text(seen["pickup"][0])
     assert "BLUE - pickup confirmed" in text(seen["pickup"][0]) and "Arrival Confirmed: not yet" in text(seen["pickup"][0])

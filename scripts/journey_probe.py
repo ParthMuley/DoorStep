@@ -1,4 +1,4 @@
-﻿"""Drive the whole V2 journey against the LIVE Doorstep agent (through Agentverse), the
+"""Drive the whole V2 journey against the LIVE Doorstep agent (through Agentverse), the
 way an ASI:One user would: send messages, click card buttons, print every message
 received, including pushed alert cards. DOORSTEP DEMO only.
 
@@ -74,7 +74,7 @@ async def run(ctx: Context):
         await say(ctx, "Show road conditions")
         await say(ctx, "Simulate Maria's reply")
         match = await say(ctx, "Find a match for Maria")
-        approved = await say(ctx, primary(card(match[0])))
+        approved = await say(ctx, primary(card(match[0])), expect=2)  # help on the way + route card
         await say(ctx, primary(card(approved[0])))
         arrival = await say(ctx, "Confirm arrival for Maria", expect=2)
         await say(ctx, primary(card(arrival[1])))

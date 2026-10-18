@@ -104,3 +104,18 @@ B's app loads `.env` at import. `tests/unit/conftest.py` clears `DEMO_AUTH_TOKEN
   1. The Calamity ingest idempotency key was time-based; two polls in one second collided, and B correctly replayed the empty first result. It is now content-hashed.
   2. The News agent's startup poll notified nobody, and the on-demand poll then stayed silent. On-demand polls now always return a snapshot, and the first scheduled tick is skipped.
 - **Tests:** 210 passed (B's unit tests included). **Live:** 7/7 mailboxes, 7/7 registered with B, full journey in 70 s.
+
+### Route agent (2026-10-18)
+- **Files:**
+  - `agents/route.py` (service agent; no LLM);
+  - `integrations/here_client.py`;
+  - `RouteRequest`/`RouteResponse` messages;
+  - `route_constraints` and `route_preview` client calls.
+- **Flow:** the journey asks the Route agent after the volunteer accepts. The approve reply is now [Help on the way, **Route card**]: distance, ETA to pickup, what was avoided, cautions for unverified reports on the path, the first directions, and the ILLUSTRATIVE banner, or a refusal with reasons.
+- **Test double:** `/routes/constraints` and `/routes/previews` stand-ins with a real Shapely post-check. The geometry mirrors B's seed; B: replace these with your real routes (contract §5.10).
+- **Tests:**
+  - `tests/integration/test_route.py` (7): enlarge-only, latitude-first syntax, refuse when there are over 20 polygons, violation notice, illustrative route with a caution, a route through the order zone refused by the post-check, no route, cache, daily cap;
+  - the end-to-end journey includes the route.
+  - **217 tests passed.**
+- **Live:** the Route agent runs and registers with B, and without `HERE_API_KEY` it returns `NO_ROUTE_CONFIRMED` (`HERE_NOT_CONFIGURED`) with no HERE call.
+- **Agentverse:** the account cap is hit again (8/8), so the Route agent currently runs local-only (`LOCAL_ONLY_AGENTS=doorstep_route`). One non-Doorstep agent occupies a slot.

@@ -47,6 +47,8 @@ from doorstep.integrations.fetch_messages import (
     RecoveryResponse,
     ReportRequest,
     ReportUnavailable,
+    RouteRequest,
+    RouteResponse,
     utc_now,
 )
 from doorstep.workflows.backend_v2 import BackendError, DoorstepBackendV2
@@ -268,11 +270,37 @@ class Journey:
         j.steps["PROVIDER_ACCEPTED"] = utc_now()
         j.map = {"color": "yellow", "label": "Volunteer accepted (not yet picked up)"}
         j.next_step = "Awaiting pickup confirmation." if j.shelter_accepted else "Shelter has not confirmed a bed yet."
+        route = await self.ask(ctx, self.address_for("ROUTE"), RouteRequest(
+            correlation_id=corr, created_at=utc_now(), case_id=case_id, assignment_id=aid,
+            idempotency_key=f"{aid}:route:v1"), RouteResponse)
         eta = vol.backend.get("eta") or {}
-        return help_on_the_way_card(case_id=case_id, display_name=NAMES.get(case_id, case_id),
-                                    volunteer_label=f"{p['volunteer_id']} ({p.get('vehicle_type', '')}, {p['org_id']})",
-                                    eta_minutes=eta.get("minutes"), eta_label=eta.get("label"),
-                                    route_status=p.get("route_status"))
+        eta_minutes = route.eta_pickup_minutes if route and route.status == "ILLUSTRATIVE_ONLY" else eta.get("minutes")
+        help_card = help_on_the_way_card(
+            case_id=case_id, display_name=NAMES.get(case_id, case_id),
+            volunteer_label=f"{p['volunteer_id']} ({p.get('vehicle_type', '')}, {p['org_id']})",
+            eta_minutes=eta_minutes, eta_label=eta.get("label") or "Illustrative estimate, not a guarantee",
+            route_status=route.status if route else "no route yet")
+        return [help_card, self.route_card(case_id, p["volunteer_id"], route)]
+
+    @staticmethod
+    def route_card(case_id: str, volunteer_id: str, r: RouteResponse | None) -> Card:
+        """Volunteer's route (shown to the coordinator until rev 4 role linking)."""
+        title = f"Route for {volunteer_id} · {NAMES.get(case_id, case_id)}"
+        if r is None:
+            return info_card(title, [("Status", "NO_ROUTE_CONFIRMED (the Route agent did not answer)")],
+                             "No route yet:", "Route agent")
+        if r.status != "ILLUSTRATIVE_ONLY":
+            rows = [("Status", f"{r.status} - no route shown"), ("Why", ", ".join(r.reasons) or "-"),
+                    ("Next", "Coordinator decides; never treat this as a safe route.")]
+            return info_card(title, rows, "Route refused (volunteer is not given a route):", "Route agent · HERE")
+        rows = [("Status", r.status), ("Distance", f"{(r.distance_m or 0) / 1000:.1f} km"),
+                ("ETA to pickup", f"about {r.eta_pickup_minutes} min (estimate, not a guarantee)"),
+                ("Total time", f"about {round((r.duration_s or 0) / 60)} min")]
+        rows += [("Avoided", f"{a['kind']} {a['id']}") for a in r.avoided] or [("Avoided", "no active blocks")]
+        rows += [("Caution", f"{c}: unverified report on the path") for c in r.cautions_on_path]
+        rows += [(f"Step {i}", d) for i, d in enumerate(r.directions, 1)]
+        rows.append(("Note", r.label))
+        return info_card(title, rows, "Illustrative route sent to the volunteer (simulated):", "Route agent · HERE")
 
     # -------------------------------------------------------- pickup/arrival
     async def confirm_pickup(self, ctx: Context, case_id: str, corr: str) -> Reply:

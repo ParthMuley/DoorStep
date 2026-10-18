@@ -140,6 +140,30 @@ class ClosureNotification(_Msg):
     note: str = "No report does not mean a road is open."
 
 
+# --- Doorstep <-> Route agent (HERE Routing v8)
+class RouteRequest(_Msg):
+    case_id: str
+    assignment_id: str
+    idempotency_key: str
+
+
+class RouteResponse(_Msg):
+    """`status` from B's post-check only: ILLUSTRATIVE_ONLY | REFUSED | NO_ROUTE_CONFIRMED.
+    Never "safe". `eta_pickup_minutes` is an illustrative estimate, not a guarantee."""
+    case_id: str
+    assignment_id: str
+    status: str
+    reasons: list[str] = []
+    route_preview_id: Optional[str] = None
+    distance_m: Optional[int] = None
+    duration_s: Optional[int] = None
+    eta_pickup_minutes: Optional[int] = None
+    directions: list[str] = []
+    avoided: list[dict[str, Any]] = []
+    cautions_on_path: list[str] = []
+    label: str = "ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"
+
+
 # --- Doorstep <-> Escalation Simulator
 class EscalationRequest(_Msg):
     escalation_id: str
