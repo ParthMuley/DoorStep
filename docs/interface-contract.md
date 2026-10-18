@@ -1,28 +1,30 @@
-# Doorstep Interface Contract — v2.0
+# Doorstep Interface Contract — v2.0 (revision 2)
 
-Shared between Developer A (Fetch.ai agents, ASI:One, cards, LangGraph) and Developer B (backend, data, geography, matching).
-**Owner: Developer B** (per `docs/DOORSTEP_V2_TEAM_PLAN.md` §6). Source: that plan §7, `Doorstep_V2_Two_Person_Claude_Code_Plan.md` §4, `Doorstep_Implementation_Master_Spec.md` §4/§6. If anything here conflicts with a safety rule in those documents, the safety rule wins.
+Shared between Developer A (Fetch.ai agents, ASI:One, cards, LangGraph) and Developer B (backend, MongoDB, geography, matching).
+**Owner: Developer B** (`docs/DOORSTEP_V2_TEAM_PLAN.md` §6). Source: that plan (revision 2) §1–§7, plus the safety rules in `Doorstep_V2_Two_Person_Claude_Code_Plan.md` and `Doorstep_Implementation_Master_Spec.md`. If anything here conflicts with a safety rule, the safety rule wins.
 
-**Status:** v2.0 **frozen once A signs off** (checkpoint C1). Until then, comments go in the PR.
-**Change rule:** any change after the freeze bumps `schema_version` (`2.0` → `2.1`), goes in a small PR touching only this file, and needs both developers to approve.
+**Status:** proposed. Frozen once A signs off (checkpoint C1). After that, any change bumps `schema_version` to `2.1`, goes in a small PR touching only this file, and needs both developers to approve.
 
-**Everything is synthetic.** All resident-facing text starts with `DOORSTEP DEMO`. Every card shows SIMULATION. Real-world data (the live Cal OES feed, real news) is **display-only** and can never trigger check-ins, block roads or change a case.
+**Everything is synthetic.** Residents, organizations, volunteers, addresses and phone numbers are fictional. All resident- and volunteer-facing text starts with `DOORSTEP DEMO`. Every card shows SIMULATION. Real-world data (live Cal OES feed, real news) is **display-only**: it never triggers check-ins or outreach, never blocks roads, never changes a case.
 
 ---
 
 ## 1. Conventions
 
-- **Versions:** every request and response body carries `"schema_version": "2.0"`. Agent messages (A) carry it too.
-- **IDs:** opaque synthetic strings. Fixed demo IDs are in §9. B generates deterministic sequential IDs (`assign_001`, `esc_001`, `ref_001`, `evt_001`, `alert_001`, `closure_001`, `route_001`), so a reset followed by the same calls gives the same IDs.
-- **Time:** UTC ISO-8601 with `Z` (`2026-10-17T20:01:00Z`). The raw Cal OES payload keeps its epoch-millisecond fields; B converts them.
-- **Geometry:** GeoJSON, coordinates **`[longitude, latitude]`**, WGS84 (EPSG:4326). All demo coordinates are fictional.
-- **Correlation:** the Coordinator creates a `correlation_id` per ASI:One turn and sends it as header `X-Correlation-ID` on every call (a body `correlation_id` is the fallback). B echoes it in the response body, the response header, every timeline event and every error.
-- **Idempotency:** any call that creates something (`matches/propose`, `accept`, `pickup`, `arrival`, `escalate`, `ack`, `recovery`, `respond`, `alerts/ingest`, `closures/ingest`) takes an `idempotency_key`. Repeating a key returns the original result with HTTP 200 and `"duplicate": true`. Never a second record.
-- **Auth:** writes (POST) need `Authorization: Bearer <DEMO_AUTH_TOKEN>`. Reads (GET) are open and return synthetic, sanitized data only (no pickup points). This is demo gating, not production auth.
-- **Validation:** Pydantic v2. Unknown top-level fields on write bodies → 422. **Exception:** provider offers and feed payloads ignore unknown fields (provider claims are never trusted anyway).
-- **Status words are authoritative.** A shows B's status strings verbatim. LLM text (ASI:One API) may explain them but never replace them.
+- **Version:** every request and response body carries `"schema_version": "2.0"`, and so do agent messages.
+- **IDs:** opaque synthetic strings. Fixed demo IDs are in §10. B generates deterministic sequential IDs (`assign_001`, `esc_001`, `ref_001`, `evt_001`, `alert_001`, `closure_001`, `route_001`), so a reset followed by the same calls gives the same IDs.
+- **Time:** UTC ISO-8601 with `Z`. The raw Cal OES payload keeps its epoch-millisecond fields; B converts them.
+- **Geometry:** GeoJSON, coordinates **`[longitude, latitude]`**, WGS84. Addresses are stored as `{label, lat, lon}`. All coordinates are fictional.
+- **Correlation:** the Doorstep agent creates a `correlation_id` per ASI:One turn and sends it as header `X-Correlation-ID` (a body `correlation_id` is the fallback). Every agent passes it on. B echoes it in the response body, the response header, every timeline event and every error.
+- **Idempotency:** every create (`alerts/ingest`, `outreach`, `availability`, `matches/propose`, `accept`, `pickup`, `arrival`, `escalate`, `ack`, `recovery`, `respond`, `closures/ingest`, `routes/*`) takes an `idempotency_key`. Repeating a key returns the original result with HTTP 200 and `"duplicate": true`.
+- **Auth (demo gating, not production auth):**
+  - All POSTs need `Authorization: Bearer <DEMO_AUTH_TOKEN>`.
+  - **Org-scoped** routes (`/orgs/{org_id}/…`) also need header `X-Org-Agent: <org_id>` equal to the path's `org_id`; otherwise 403. That way an org agent can read and write only its own org.
+  - GETs are open but sanitized. They never return volunteer addresses or phones, resident addresses or phones, or pickup points, except the org-scoped volunteer read.
+- **Validation:** Pydantic v2. Unknown top-level fields on write bodies → 422. **Exception:** raw feed payloads ignore unknown fields.
+- **Status words are authoritative.** A shows B's status strings verbatim. ASI:One API text may explain them, never replace them.
 
-## 2. Enums (exact strings)
+## 2. Enums and codes
 
 | Name | Values |
 |---|---|
@@ -32,18 +34,41 @@ Shared between Developer A (Fetch.ai agents, ASI:One, cards, LangGraph) and Deve
 | `zone_status` | `ORDER`, `WARNING`, `SHELTER_IN_PLACE`, `OUTSIDE_KNOWN_ZONES`, `UNKNOWN`, `STALE` |
 | `alert.status` | `ORDER`, `WARNING`, `SHELTER_IN_PLACE`, `INACTIVE`, `UNKNOWN` |
 | `alert.verification` | `OFFICIAL_SIMULATION`, `OFFICIAL_LIVE_DISPLAY_ONLY` |
+| `calamity_type` | `WILDFIRE`, `FLOOD`, `EARTHQUAKE`, `STORM`, `HEAT`, `OTHER`, `UNKNOWN` (feed gave none; orgs with `ANY` or all types are contacted) |
+| `org services` | `TRANSPORT`, `SHELTER`, `RECOVERY_HOUSING`, `INSURANCE_GUIDANCE`, `SUPPLIES`, `MEDICAL_EQUIPMENT_REPLACEMENT`, `CASEWORK` |
+| `volunteer_availability` | `UNASKED`, `ASKED`, `AVAILABLE`, `UNAVAILABLE`, `NO_REPLY` (per alert) |
 | `freshness` | `FRESH`, `STALE`, `NO_DATA` |
 | `escalation.status` | `REQUESTED`, `ACKNOWLEDGED_REQUEST_ONLY`, `NO_ACKNOWLEDGMENT` |
 | `recovery.status` | `NOT_REQUESTED`, `REQUESTED`, `ACCEPTED`, `COMPLETED`, `UNRESOLVED` |
+| `recovery help_type` | `TEMPORARY_HOUSING`, `INSURANCE_GUIDANCE`, `SUPPLIES`, `MEDICAL_EQUIPMENT_REPLACEMENT`, `CASEWORK` |
 | `closure.state` | `OFFICIAL_CONFIRMED`, `UNVERIFIED_REPORT`, `CONFLICTING`, `EXPIRED` |
 | `closure.source_type` | `OFFICIAL_SIMULATION`, `NEWS`, `REAL_WORLD_CONTEXT` |
 | `route.status` | `ILLUSTRATIVE_ONLY`, `REFUSED`, `NO_ROUTE_CONFIRMED` |
 | `consent purpose` | `CHECKIN`, `TRANSPORT`, `DESTINATION`, `RECOVERY` |
-| `map color` | `red` NEEDS_ASSISTANCE, `yellow` PROVIDER_ACCEPTED, `blue` PICKUP_CONFIRMED, `green` ARRIVAL_CONFIRMED, `black` REQUIRES_COORDINATOR, `gray` UNKNOWN; always paired with a text `label` |
+| `map color` | `red` NEEDS_ASSISTANCE, `yellow` PROVIDER_ACCEPTED, `blue` PICKUP_CONFIRMED, `green` ARRIVAL_CONFIRMED, `black` REQUIRES_COORDINATOR, `gray` UNKNOWN; always with a text `label` |
 
-**Never:** acceptance ⇒ pickup, pickup ⇒ arrival, silence ⇒ danger or safety, failed delivery ⇒ no reply, escalation acknowledgment ⇒ dispatch, referral accepted ⇒ housing secured, no closure report ⇒ road open, missing/stale data ⇒ safe.
+### Needs codes (shared by residents and volunteers)
 
-**Zone dominance** (a resident covered by several alerts): `ORDER` > `SHELTER_IN_PLACE` > `WARNING` > `OUTSIDE_KNOWN_ZONES`. If any relevant source is stale → `STALE`. No data or an uncertain geocode → `UNKNOWN`. A polygon covers points **on its edge**.
+A resident's `needs` and a volunteer's `needs_they_can_cater` (and a shelter site's `features`) use the **same integers**, so matching is code-to-code: *resident needs ⊆ volunteer capabilities*.
+
+| Code | Need | Notes |
+|---|---|---|
+| 1 | `WHEELCHAIR` | wheelchair-accessible vehicle; also needs `wheelchair_spaces ≥ 1` |
+| 2 | `TRANSFER_ASSIST` | help getting into the vehicle |
+| 3 | `OXYGEN_EQUIPMENT` | oxygen equipment handling (never assumed for ordinary volunteers) |
+| 4 | `PET` | also needs `pet_capacity ≥ pet_count` |
+| 5 | `SERVICE_ANIMAL` | |
+| 6 | `STEP_FREE_DESTINATION` | checked against the shelter site, not the vehicle |
+| 7 | `SPANISH_SPEAKER` | communication support; **never** a reason to reject (preference only) |
+| 8 | `MOBILITY_AID` | walker / cane space |
+| 9 | `MEDICAL_EQUIPMENT_SPACE` | |
+| 10 | `CAREGIVER_RIDES_ALONG` | needs `vehicle_seats ≥ 2` |
+
+New codes may be added in a contract bump. Codes never change meaning.
+
+**Never:** acceptance ⇒ pickup, pickup ⇒ arrival, silence ⇒ danger or safety, failed delivery ⇒ no reply, escalation acknowledgment ⇒ dispatch, referral accepted ⇒ help delivered, no closure report ⇒ road open, missing/stale data ⇒ safe, a radius ⇒ an evacuation order.
+
+**Zones:** a resident is affected when an official zone polygon **covers** their point (the edge counts as inside). If several alerts cover the point, `ORDER` > `SHELTER_IN_PLACE` > `WARNING` > `OUTSIDE_KNOWN_ZONES`. Any relevant stale source → `STALE`; no data or an uncertain geocode → `UNKNOWN`. A radius around an incident point is **awareness only**.
 
 ## 3. Errors
 
@@ -54,83 +79,75 @@ Shared between Developer A (Fetch.ai agents, ASI:One, cards, LangGraph) and Deve
 | HTTP | `error` | When |
 |---|---|---|
 | 401 | `UNAUTHORIZED` | missing/invalid Bearer token |
-| 403 | `UNAUTHORIZED` | wrong provider identity, unknown SMS sender, consent not from resident/caregiver |
-| 404 | `NOT_FOUND` | unknown case/assignment/offer/alert |
+| 403 | `UNAUTHORIZED` | `X-Org-Agent` ≠ path org; wrong org/volunteer on an assignment; unknown SMS sender; consent not from resident/caregiver |
+| 404 | `NOT_FOUND` | unknown resident/org/volunteer/case/assignment/alert |
 | 409 | `CONSENT_MISSING` | sharing without the purpose consent (nothing shared) |
-| 409 | `UNSAFE_ZONE` | selected offer in/through an ORDER zone |
-| 409 | `ZONE_STALE` / `ZONE_UNKNOWN` | zone data stale or unknown; assignment refused |
-| 409 | `PROVIDER_NOT_APPROVED` | org or volunteer not approved in B's registry |
-| 409 | `OFFER_NOT_ELIGIBLE` | selected offer fails a hard constraint (see `reasons`) |
+| 409 | `UNSAFE_ZONE` / `ZONE_STALE` / `ZONE_UNKNOWN` | assignment or route refused by zone status |
+| 409 | `NOT_ELIGIBLE` | a `select`ed volunteer/site fails a rule (see `reasons`) |
 | 409 | `NOT_AUTHORIZED` | `authorization` is not `SIMULATED_PREAPPROVED` |
 | 409 | `NEEDS_NOT_CONFIRMED` | matching before the resident confirmed needs |
-| 409 | `INVALID_TRANSITION` | late reply to a canceled/declined assignment, pickup before acceptance, arrival before pickup, etc. |
+| 409 | `ALREADY_RESERVED` | volunteer reserved for another case |
+| 409 | `STALE_AVAILABILITY` | availability answer for an old alert |
+| 409 | `INVALID_TRANSITION` | late reply to a canceled/declined assignment, pickup before acceptance, arrival before pickup… |
 | 409 | `INSUFFICIENT_EVIDENCE` | pickup/arrival evidence incomplete or from the wrong party |
-| 409 | `DUPLICATE_ACCEPTANCE` | a second provider tries to accept after one already did |
 | 409 | `REASON_MISMATCH` | escalation reason not true for this case |
 | 409 | `ROUTE_REFUSED` | route constraints refused (see `reasons`) |
-| 422 | `VALIDATION_ERROR` | body failed validation (`reasons` = field paths) |
-| 422 | `FEED_INVALID` | ingest payload is not a valid feed |
+| 422 | `VALIDATION_ERROR` / `FEED_INVALID` | body or feed payload invalid |
 
-## 4. Reason codes
+## 4. Reason codes (shown on cards)
 
-**Positive (eligible):** `PROVIDER_APPROVED`, `VOLUNTEER_APPROVED`, `IN_SERVICE_AREA`, `WHEELCHAIR_OK`, `TRANSFER_OK`, `OXYGEN_OK`, `PET_OK`, `SERVICE_ANIMAL_OK`, `STEP_FREE_OK`, `RESTROOM_OK`, `OXYGEN_POWER_OK`, `CAPACITY_OK`, `AVAILABILITY_CONFIRMED`, `OUTSIDE_ORDER_ZONE`, `ROUTE_AVOIDS_CLOSURES`.
+**Positive:** `ORG_APPROVED`, `VOLUNTEER_APPROVED`, `CALAMITY_TYPE_SUPPORTED`, `WITHIN_SERVICE_RADIUS`, `AVAILABLE_FOR_THIS_ALERT`, `NEEDS_COVERED`, `WHEELCHAIR_OK`, `TRANSFER_OK`, `OXYGEN_OK`, `PET_OK`, `SERVICE_ANIMAL_OK`, `SEATS_OK`, `STEP_FREE_OK`, `BEDS_OK`, `OUTSIDE_ORDER_ZONE`, `ROUTE_AVOIDS_ORDER_ZONES`.
 
-**Rejection:** `PROVIDER_NOT_APPROVED`, `VOLUNTEER_NOT_APPROVED`, `CAPABILITY_NOT_REGISTERED` (offer claims more than B's registry), `AVAILABILITY_UNCONFIRMED` (missing or past `valid_until`), `OUTSIDE_SERVICE_AREA`, `NOT_WHEELCHAIR_ACCESSIBLE`, `NO_WHEELCHAIR_SPACE_AVAILABLE`, `NO_TRANSFER_ASSISTANCE`, `NO_OXYGEN_HANDLING`, `PETS_NOT_ALLOWED`, `SERVICE_ANIMAL_NOT_ACCOMMODATED`, `SERVICE_ANIMAL_UNCONFIRMED`, `NO_SEATS_AVAILABLE`, `NOT_STEP_FREE`, `NO_ACCESSIBLE_RESTROOM`, `NO_OXYGEN_POWER`, `NO_BEDS_AVAILABLE`, `ORDER_ZONE`, `DESTINATION_IN_ORDER_ZONE`, `ZONE_STALE`, `ZONE_UNKNOWN`, `NO_ROUTE_AVOIDING_CLOSURES`, `PROVIDER_ALREADY_DECLINED`.
+**Rejection:** `ORG_NOT_APPROVED`, `VOLUNTEER_NOT_APPROVED`, `CALAMITY_TYPE_NOT_SUPPORTED`, `OUTSIDE_SERVICE_RADIUS`, `NOT_ASKED_YET`, `UNAVAILABLE`, `NO_REPLY`, `AVAILABILITY_FROM_OLD_ALERT`, `ALREADY_RESERVED`, `NEEDS_NOT_COVERED` (with `missing_needs: [codes]`), `NO_WHEELCHAIR_SPACE`, `INSUFFICIENT_PET_CAPACITY`, `NO_SEATS`, `NO_BEDS`, `ORDER_ZONE`, `SHELTER_IN_ORDER_ZONE`, `ZONE_STALE`, `ZONE_UNKNOWN`, `ROUTE_THROUGH_ORDER_ZONE`, `ALREADY_DECLINED`.
 
 ## 5. HTTP API (B implements, A calls)
 
-Base URL: `DOORSTEP_API_URL` (default `http://127.0.0.1:8000`). Responses below omit `schema_version` and `correlation_id`; **both are always present**.
+Base URL `DOORSTEP_API_URL` (default `http://127.0.0.1:8000`). Responses below omit `schema_version` and `correlation_id`; **both are always present**.
 
 ### 5.1 Health and demo
+- **`GET /health`** → `{"status":"ok","version":"2.0.0","simulation_mode":true,"databases":{"users":"ok","orgs":"ok"},"alerts":{"last_ingest_at":"…","feed_freshness":"FRESH"},"closures":{"last_ingest_at":"…"}}`
+- **`POST /demo/reset`** (token): reseed §10 into both databases. → `{"status":"reset","residents":2,"organizations":7,"volunteers":6,"simulated":true}`
 
-**`GET /health`**
-```json
-{"status":"ok","version":"2.0.0","simulation_mode":true,
- "alerts":{"last_ingest_at":"2026-10-17T20:02:00Z","feed_freshness":"FRESH"},
- "closures":{"last_ingest_at":"2026-10-17T20:02:30Z"}}
-```
-
-**`POST /demo/reset`** (token): reseeds §9. → `{"status":"reset","residents":2,"organizations":9,"simulated":true}`
-
-### 5.2 Enrollment
+### 5.2 Registration (before a calamity)
 
 **`POST /residents`** → 201
 ```json
-{"resident":{"display_name":"Rosa (synthetic)","preferred_language":"es","contact_channel":"sim_phone_rosa",
-  "address_label":"SYNTHETIC: 12 Example Way","location":{"lat":34.1052,"lon":-118.0951,"geocode_confidence":"HIGH"},
-  "needs":{"wheelchair_accessible_vehicle":true,"transfer_assistance":false,"portable_oxygen_equipment":false,
-           "pet_count":0,"service_animal":false,"preferred_language":"es","destination_accessibility":["step_free_entry"]},
-  "trusted_contact":{"display_name":"Luis (synthetic)","contact_channel":"sim_phone_luis","relationship":"son"}},
- "consents":[{"purpose":"CHECKIN","granted":true},{"purpose":"TRANSPORT","granted":true},
-             {"purpose":"DESTINATION","granted":true},{"purpose":"RECOVERY","granted":false}]}
+{"resident":{"name":"Rosa (synthetic)","phone":"sim_phone_rosa","language":"es",
+  "address":{"label":"SYNTHETIC: 12 Example Way","lat":34.1052,"lon":-118.0951,"geocode_confidence":"HIGH"},
+  "emergency_contacts":[{"name":"Luis (synthetic)","phone":"sim_phone_luis","relationship":"son"}],
+  "needs":[1,6],"pet_count":0,"wants_help_contact":true,
+  "consents":{"CHECKIN":true,"TRANSPORT":true,"DESTINATION":true,"RECOVERY":false}}}
 ```
-Response: `{"resident_id":"resident_003","consents":{"CHECKIN":true,"TRANSPORT":true,"DESTINATION":true,"RECOVERY":false},"zone_status":"OUTSIDE_KNOWN_ZONES","created_at":"…"}`.
-`geocode_confidence` `LOW`/`FAILED` → `zone_status: UNKNOWN` (never an automated zone conclusion).
+→ `{"resident_id":"resident_003","zone_status":"OUTSIDE_KNOWN_ZONES","consents":{…},"created_at":"…"}`
+- `wants_help_contact:false` means the resident is never contacted (and `CHECKIN` is forced false).
+- `geocode_confidence` `LOW`/`FAILED` → `zone_status: UNKNOWN`.
+- An emergency contact can reply on the resident's behalf, as a caregiver.
 
-**`POST /organizations`** → 201
+**`POST /organizations`** → 201: registers an org with its volunteers embedded (the team's document shape).
 ```json
-{"organization":{"organization_id":"transport_org_f","display_name":"Foothill Access Vans (fictional)",
-  "org_type":"TRANSPORT","approval_status":"APPROVED","service_area_zones":["zone_2","zone_3"],
-  "base_location":{"lat":34.0920,"lon":-118.1150},"contact_alias":"sim_org_f",
-  "vehicles":[{"vehicle_id":"van_f1","seats":2,"wheelchair_spaces":1,"transfer_assistance":true,
-               "oxygen_handling_authorized":false,"pets_allowed":true,"service_animals_allowed":true}],
-  "destination_sites":[]}}
+{"organization":{"org_id":"red_cross_demo","name":"Red Cross (fictional demo chapter)",
+  "location":{"label":"Culver City (synthetic)","lat":34.021,"lon":-118.396},
+  "calamity_types":["WILDFIRE","FLOOD","EARTHQUAKE"],"services":["TRANSPORT","SHELTER","RECOVERY_HOUSING"],
+  "approved":true,"service_radius_km":25,"agent_address":"agent1q…",
+  "volunteers":[{"volunteer_id":"volunteer_maya","name":"Maya (synthetic)","phone":"sim_phone_maya",
+    "address":{"label":"SYNTHETIC: Zone 4","lat":34.080,"lon":-118.120},
+    "vehicle_type":"MINIVAN","vehicle_seats":4,"wheelchair_spaces":0,"pet_capacity":1,
+    "needs_they_can_cater":[2,4,7,8],"approved":true}],
+  "shelter_sites":[{"site_id":"rc_shelter_1","name":"Red Cross Shelter (fictional)","lat":34.03,"lon":-118.38,
+    "beds_available":30,"features":[6,4,5]}],
+  "recovery_services":["TEMPORARY_HOUSING"]}}
 ```
-`org_type`: `TRANSPORT | DESTINATION | RECOVERY | COMMUNITY`. `approval_status`: `APPROVED | PENDING | REVOKED`. Destination orgs list `destination_sites` (`destination_id, location, beds_total, step_free_entry, accessible_restroom, pets_allowed, service_animals_allowed, oxygen_power_outlets`).
-Response: `{"organization_id":"transport_org_f","approval_status":"APPROVED","vehicles":["van_f1"],"destination_sites":[]}`.
+→ `{"org_id":"red_cross_demo","approved":true,"volunteers":["volunteer_maya"],"shelter_sites":["rc_shelter_1"]}`
+- `vehicle_type`: free label (`WHEELCHAIR_VAN`, `MINIVAN`, `SEDAN`, `SUV`, `BUS`).
+- `approved` (org and each volunteer) = simulated partner preapproval, never decided by an LLM.
 
-**`POST /volunteers`** → 201
-```json
-{"volunteer":{"volunteer_id":"volunteer_sarah","organization_id":"transport_org_a","display_name":"Sarah (synthetic)",
-  "approval_status":"APPROVED","available_opt_in":true,"vehicle_ids":["van_a1"]}}
-```
-Response: `{"volunteer_id":"volunteer_sarah","organization_id":"transport_org_a","approval_status":"APPROVED"}`.
+**`POST /organizations/{org_id}/volunteers`** (token + `X-Org-Agent`) → 201: add a volunteer to an existing org (same volunteer shape).
 
-**`GET /organizations`**: registry read for cards: orgs with approval, vehicles, sites, volunteers (no contact details).
+**`GET /organizations`**: sanitized registry for cards: `org_id, name, location.label, calamity_types, services, approved, volunteer_count, shelter_sites (name, beds, features)`. No volunteer addresses or phones.
 
-### 5.3 Alerts (Calamity Checker agent ↔ B)
+### 5.3 Alerts (Calamity Checker ↔ B)
 
-**`GET /demo/feeds/caloes`**: the synthetic feed in the **exact Cal OES GeoJSON shape** (what the Calamity agent fetches in the demo).
+**`GET /demo/feeds/caloes`**: the synthetic feed in the **exact Cal OES GeoJSON shape**.
 ```json
 {"type":"FeatureCollection","features":[{"type":"Feature","id":1,
   "geometry":{"type":"Polygon","coordinates":[[[-118.100,34.100],[-118.090,34.100],[-118.090,34.110],[-118.100,34.110],[-118.100,34.100]]]},
@@ -140,311 +157,300 @@ Response: `{"volunteer_id":"volunteer_sarah","organization_id":"transport_org_a"
     "STATEWIDE_LAST_UPDATED":1792281660000,"GlobalID":"sim-0001"}}]}
 ```
 
-**`POST /alerts/ingest`** (token). The Calamity agent posts what it fetched, **including failed fetches**:
+**`POST /alerts/ingest`** (token): the Calamity agent posts what it fetched, **including failed fetches**.
 ```json
 {"source":{"source_id":"SYNTHETIC_CALOES","source_type":"OFFICIAL_SIMULATION",
            "url":"http://127.0.0.1:8000/demo/feeds/caloes","fetched_at":"2026-10-17T20:02:00Z"},
- "fetch_ok":true,"http_status":200,"error":null,
- "payload":{"type":"FeatureCollection","features":[…]},
+ "fetch_ok":true,"http_status":200,"error":null,"payload":{"type":"FeatureCollection","features":[…]},
  "idempotency_key":"SYNTHETIC_CALOES:2026-10-17T20:02:00Z"}
 ```
-`source_type`: `OFFICIAL_SIMULATION` (synthetic; may trigger check-ins) or `REAL_WORLD` (live Cal OES; display-only). `fetch_ok:false` with no payload marks the feed's freshness down; it never cancels alerts.
+`source_type`: `OFFICIAL_SIMULATION` (can trigger check-ins and outreach) or `REAL_WORLD` (live Cal OES; display-only).
 
 Response 200:
 ```json
-{"ingest_id":"ingest_004","source_id":"SYNTHETIC_CALOES","source_updated_at":"2026-10-17T20:01:00Z","feed_freshness":"FRESH",
+{"ingest_id":"ingest_004","source_id":"SYNTHETIC_CALOES","source_updated_at":"…","feed_freshness":"FRESH",
  "records_received":2,"records_rejected":[{"source_record_id":"sim-0009","reason":"UNKNOWN_STATUS:Evacuation Advisory"}],
- "new_alerts":["alert_001","alert_002"],"changed_alerts":[],"canceled_alerts":[],"pending_cancellation":[],
+ "new_alerts":[{"alert_id":"alert_001","status":"WARNING","zone_id":"zone_3_sector_b","calamity_type":"WILDFIRE"},
+               {"alert_id":"alert_002","status":"ORDER","zone_id":"zone_3_sector_a","calamity_type":"WILDFIRE"}],
+ "changed_alerts":[],"canceled_alerts":[],"pending_cancellation":[],
  "affected_cases":[{"case_id":"case_maria_001","resident_id":"resident_001","zone_status":"WARNING","alert_id":"alert_001"},
                    {"case_id":"case_david_002","resident_id":"resident_002","zone_status":"ORDER","alert_id":"alert_002"}],
  "checkins_sent":[{"case_id":"case_maria_001","message_id":"msg_001"},{"case_id":"case_david_002","message_id":"msg_002"}],
+ "outreach_orgs":[{"org_id":"eastside_rides_demo","name":"Eastside Accessible Rides (fictional)","agent_address":"agent1q…",
+                   "distance_km":4.1,"calamity_types":["WILDFIRE"],"alert_id":"alert_001"},
+                  {"org_id":"red_cross_demo","name":"Red Cross (fictional demo chapter)","agent_address":"agent1q…",
+                   "distance_km":7.9,"calamity_types":["WILDFIRE","FLOOD","EARTHQUAKE"],"alert_id":"alert_001"}],
  "notify_coordinator":true,"duplicate":false}
 ```
 B's rules:
-- `STATUS` is mapped case-insensitively: `evacuation order`→ORDER, `evacuation warning`→WARNING, `shelter in place`→SHELTER_IN_PLACE, `normal`/`clear to repopulate`→INACTIVE. Anything else is rejected and listed, never guessed.
-- Freshness comes from `STATEWIDE_LAST_UPDATED`/`EDIT_DATE` vs `ALERT_STALE_AFTER_SECONDS`.
-- Dedupe by source record + version + zone.
-- An alert is canceled only by an INACTIVE status **or** after missing from **2 consecutive successful ingests** (it's listed in `pending_cancellation` after the first miss). This covers Cal OES's rebuild gap.
-- Check-ins go out only for new or changed `OFFICIAL_SIMULATION` WARNING/ORDER alerts, to residents with CHECKIN consent, keyed `alert:status:resident`. Ingesting the same feed 10× sends 1 check-in.
+- **Status:** mapped case-insensitively (`evacuation order`→ORDER, `evacuation warning`→WARNING, `shelter in place`→SHELTER_IN_PLACE, `normal`/`clear to repopulate`→INACTIVE). Unknown strings are rejected and listed, never guessed.
+- **Calamity type:** from `EVENT_TYPE` (`wildfire`/`fire`→WILDFIRE, `flood`→FLOOD…); null → `UNKNOWN`.
+- **Freshness:** from `STATEWIDE_LAST_UPDATED`/`EDIT_DATE` vs `ALERT_STALE_AFTER_SECONDS`.
+- **Dedupe:** by source record + version + zone.
+- **Cancellation:** only on INACTIVE **or** after missing from 2 consecutive successful ingests (Cal OES rebuild gap).
+- **Check-ins:** only for new/changed `OFFICIAL_SIMULATION` WARNING/ORDER alerts, to residents with `wants_help_contact` and `CHECKIN` consent, keyed `alert:status:resident`. 10 identical ingests → 1 check-in.
+- **`outreach_orgs`:** approved orgs offering `TRANSPORT` whose `calamity_types` include the alert's type (or `ANY`), within `service_radius_km` of the zone, sorted by distance, top `OUTREACH_MAX_ORGS` (default 3). Returned only for simulated alerts with affected residents. The Doorstep agent sends an `OutreachRequest` to each listed org's agent.
 
-**`GET /alerts/active`**
+**`GET /alerts/active`**: normalized alerts:
 ```json
-{"alerts":[{"alert_id":"alert_002","source_id":"SYNTHETIC_CALOES","source_record_id":"sim-0001","source_url":null,
-  "event_type":"WILDFIRE_EVACUATION","status":"ORDER","raw_status":"Evacuation Order","zone_id":"zone_3_sector_a",
-  "zone_name":"DEMO Zone 3 Sector A","geometry":{"type":"Polygon","coordinates":[…]},
-  "issued_at":"2026-10-17T20:00:00Z","updated_at":"2026-10-17T20:01:00Z","expires_at":"2026-10-17T22:00:00Z",
-  "fetched_at":"2026-10-17T20:02:00Z","freshness":"FRESH","verification":"OFFICIAL_SIMULATION",
-  "can_trigger_checkins":true,"is_simulation":true,"affected_resident_count":1}],
- "feeds":[{"source_id":"SYNTHETIC_CALOES","source_type":"OFFICIAL_SIMULATION","last_ingest_at":"…",
-           "source_updated_at":"…","feed_freshness":"FRESH"}],
+{"alerts":[{"alert_id":"alert_002","source_id":"SYNTHETIC_CALOES","source_record_id":"sim-0001","status":"ORDER",
+  "raw_status":"Evacuation Order","calamity_type":"WILDFIRE","zone_id":"zone_3_sector_a","zone_name":"DEMO Zone 3 Sector A",
+  "geometry":{…},"issued_at":"…","updated_at":"…","expires_at":"…","fetched_at":"…","freshness":"FRESH",
+  "verification":"OFFICIAL_SIMULATION","can_trigger_checkins":true,"is_simulation":true,"affected_resident_count":1}],
+ "awareness":[{"incident_id":"inc_001","calamity_type":"WILDFIRE","point":{"lat":34.115,"lon":-118.085},
+               "radius_km":5,"residents_nearby_not_in_zone":0,"note":"Awareness only; not an evacuation zone."}],
+ "feeds":[{"source_id":"SYNTHETIC_CALOES","source_type":"OFFICIAL_SIMULATION","last_ingest_at":"…","feed_freshness":"FRESH"}],
  "generated_at":"…"}
 ```
-Live alerts appear with `verification: OFFICIAL_LIVE_DISPLAY_ONLY`, `can_trigger_checkins: false`, `affected_resident_count: null`.
+Live alerts show `verification: OFFICIAL_LIVE_DISPLAY_ONLY`, `can_trigger_checkins: false`.
 
-**`POST /demo/alerts/trigger`** (token): changes the synthetic feed. The Calamity agent's next poll picks it up (`poll_now:true` ingests immediately, for tests and fast demos).
-```json
-{"action":"ISSUE","preset":"ZONE_3_WARNING_AND_ORDER","poll_now":false}
-```
-`action`: `ISSUE | UPDATE | CANCEL | EXPIRE | FREEZE_FEED | UNFREEZE_FEED`. Use either `preset` (`ZONE_3_WARNING_AND_ORDER`, `ZONE_3_WARNING`, `ZONE_3_ORDER`) or explicit `zone_id` + `status` (raw Cal OES string) + optional `geometry`, `expires_in_minutes`. `FREEZE_FEED` stops `STATEWIDE_LAST_UPDATED` advancing, so the feed becomes STALE after the threshold (Scenario C).
-Response: `{"action":"ISSUE","feed_version":3,"synthetic_feed_url":"/demo/feeds/caloes","poll_result":null}`.
+**`POST /demo/alerts/trigger`** (token): changes the synthetic feed. The Calamity agent's next poll picks it up (`poll_now:true` ingests immediately).
+`{"action":"ISSUE","preset":"ZONE_3_WILDFIRE","poll_now":false}`
+- `action`: `ISSUE | UPDATE | CANCEL | EXPIRE | FREEZE_FEED | UNFREEZE_FEED`.
+- `preset`: `ZONE_3_WILDFIRE` (WARNING over Maria + ORDER over David + an awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER`. Or explicit `zone_id`, `status` (raw Cal OES string), `event_type`, `geometry`, `expires_in_minutes`.
+- `FREEZE_FEED` stops `STATEWIDE_LAST_UPDATED` advancing, so the feed goes STALE (Scenario C).
 
-### 5.4 Cases
+**`GET /alerts/{alert_id}/outreach`** (card data): `{"alert_id","orgs":[{"org_id","name","distance_km","asked":3,"available":2,"unavailable":0,"no_reply":1}]}`.
 
-**`GET /cases?zone_id=&resident_status=&zone_status=&unresolved=true`** → `{"cases":[CaseSummary]}`
-CaseSummary: `case_id, display_name, zone_id, zone_status, resident_status, communication_status, map{color,label}, unresolved, next_step, updated_at`.
+### 5.4 Volunteer outreach (Organization agents ↔ B)
+
+**`POST /orgs/{org_id}/outreach`** (token + `X-Org-Agent`): the org agent starts asking its own volunteers for this alert. B resets those volunteers' availability for this alert to `ASKED` and sends each approved volunteer a simulated SMS (`DOORSTEP DEMO: A simulated wildfire alert… Can you help with accessible transport? Reply YES or NO.`).
+`{"alert_id":"alert_001","idempotency_key":"alert_001:outreach:eastside_rides_demo"}`
+→ `{"org_id":"eastside_rides_demo","alert_id":"alert_001","asked":[{"volunteer_id":"volunteer_sarah","message_id":"msg_010"}],"skipped":[{"volunteer_id":"volunteer_tom","reason":"VOLUNTEER_NOT_APPROVED"}]}`
+
+Volunteers answer through the simulator (`POST /sim/inbound` from their `phone`, `YES`/`NO`/`SI`). B records the answer against the **current** alert. **Alternatively**, an org agent that collected answers itself posts them:
+
+**`POST /orgs/{org_id}/volunteers/{volunteer_id}/availability`** (token + `X-Org-Agent`)
+`{"alert_id":"alert_001","available":true,"responded_at":"…","idempotency_key":"alert_001:avail:volunteer_sarah"}` → `{"volunteer_id":"volunteer_sarah","alert_id":"alert_001","availability":"AVAILABLE"}`. An answer for an older alert → 409 `STALE_AVAILABILITY`.
+
+**`GET /orgs/{org_id}/volunteers?alert_id=alert_001`** (token + `X-Org-Agent`): **only this org's** volunteers, with phone, address, vehicle, capabilities and availability for that alert. The org agent uses it to build its `OutreachResult`.
+
+**Reply deadline for volunteers:** `POST /sim/outreach/{alert_id}/deadline` marks unanswered volunteers `NO_REPLY` (never treated as available).
+
+### 5.5 Cases
+
+**`GET /cases?zone_id=&resident_status=&zone_status=&unresolved=true`** → `{"cases":[{case_id, display_name, zone_id, zone_status, resident_status, communication_status, map, unresolved, next_step, updated_at}]}`
 
 **`GET /cases/{case_id}`**
 ```json
-{"case_id":"case_maria_001","resident_id":"resident_001","display_name":"Maria (synthetic)","zone_id":"zone_3",
- "zone_status":"WARNING","zone_sources":[{"alert_id":"alert_001","status":"WARNING","source_id":"SYNTHETIC_CALOES","freshness":"FRESH"}],
- "preferred_language":"es","resident_status":"PICKUP_CONFIRMED","communication_status":"REPLIED","needs_confirmed":true,
- "needs":{…},"consent":{"CHECKIN":true,"TRANSPORT":true,"DESTINATION":true,"RECOVERY":false},
+{"case_id":"case_maria_001","resident_id":"resident_001","display_name":"Maria (synthetic)","alert_id":"alert_001",
+ "zone_id":"zone_3_sector_b","zone_status":"WARNING","zone_sources":[{"alert_id":"alert_001","status":"WARNING","freshness":"FRESH"}],
+ "preferred_language":"es","resident_status":"PROVIDER_ACCEPTED","communication_status":"REPLIED","needs_confirmed":true,
+ "needs":[1,2,4,6],"pet_count":1,"consent":{"CHECKIN":true,"TRANSPORT":true,"DESTINATION":true,"RECOVERY":false},
  "progress_steps":[{"step":"REQUESTED","done":true,"at":"…"},{"step":"PROVIDER_ACCEPTED","done":true,"at":"…"},
-                   {"step":"PICKUP_CONFIRMED","done":true,"at":"…","evidence_ref":"verif_001"},{"step":"ARRIVAL_CONFIRMED","done":false,"at":null}],
- "active_assignment":{"assignment_id":"assign_001","provider_id":"transport_org_a","volunteer_id":"volunteer_sarah",
-                      "assignment_status":"ACCEPTED","confirmed_pickup_at":"…","confirmed_arrival_at":null},
- "destination_assignment":{"assignment_id":"assign_001_dest","provider_id":"destination_org_a","destination_id":"dest_center_a","assignment_status":"ACCEPTED"},
- "escalations":[],"recovery":{"status":"NOT_REQUESTED"},
- "map":{"color":"blue","label":"Pickup confirmed (not yet arrived)"},"unresolved":false,
- "next_step":"Awaiting arrival confirmation at the agreed destination.",
- "summary_text":"[SIMULATION] Maria (synthetic) | case case_maria_001 | Pickup confirmed (not yet arrived) (blue)\n…",
- "timeline":[{"event_id":"evt_001","type":"ALERT_VERIFIED","created_at":"…","evidence":"OFFICIAL_SIMULATION"}, …],
- "simulated":true}
+                   {"step":"PICKUP_CONFIRMED","done":false,"at":null},{"step":"ARRIVAL_CONFIRMED","done":false,"at":null}],
+ "active_assignment":{"assignment_id":"assign_001","org_id":"eastside_rides_demo","volunteer_id":"volunteer_sarah",
+   "vehicle_type":"WHEELCHAIR_VAN","assignment_status":"ACCEPTED","eta":{"minutes":18,"label":"Illustrative estimate, not a guarantee"},
+   "confirmed_pickup_at":null,"confirmed_arrival_at":null},
+ "shelter_assignment":{"org_id":"civic_shelter_demo","site_id":"dest_center_a","assignment_status":"ACCEPTED"},
+ "route":{"route_preview_id":"rprev_001","status":"ILLUSTRATIVE_ONLY"},
+ "escalations":[],"recovery":{"status":"NOT_REQUESTED","referrals":[]},
+ "map":{"color":"yellow","label":"Volunteer accepted (not yet picked up)"},"unresolved":false,
+ "next_step":"Awaiting pickup confirmation.","summary_text":"[SIMULATION] Maria (synthetic) | …",
+ "timeline":[{"event_id":"evt_001","type":"ALERT_VERIFIED","created_at":"…","evidence":"OFFICIAL_SIMULATION"}, …],"simulated":true}
 ```
-The timeline never contains free-text resident details.
+Never includes addresses, phones or free-text replies.
 
-**`POST /cases/{case_id}/responses`** (token): resident reply via the simulator.
+**`POST /cases/{case_id}/responses`** (token): resident reply (also via `/sim/inbound`).
+`{"text":"1 Necesito ayuda. Uso silla de ruedas y tengo un perro pequeño.","language":"es","sender":"sim_phone_maria","external_id":"sim_maria_reply_1"}`
+→ `response_id, original_text, intent, candidate_needs:[codes], candidate_source (DETERMINISTIC | ASI_ONE_ASSISTED), needs_confirmed, confirmation_question, resident_status, communication_status, next_step, duplicate`. Confirming: `"SI"`/`"YES"` → `needs_confirmed:true` plus `needs`. Unknown sender → 403, case unchanged.
+
+### 5.6 Matching and assignments
+
+**`POST /matches/propose`** (token): the Matching agent asks B to match a resident with an **available volunteer from the org DB** and a **shelter site**.
 ```json
-{"text":"1 Necesito ayuda. Uso silla de ruedas y tengo un perro pequeño.","language":"es","sender":"sim_phone_maria","external_id":"sim_maria_reply_1"}
+{"case_id":"case_maria_001","idempotency_key":"case_maria_001:match:v1","create_proposal":true,
+ "authorization":"SIMULATED_PREAPPROVED","select":{"volunteer_id":null,"site_id":null}}
 ```
-Response: `response_id, original_text, intent, candidate_needs, candidate_source` (`DETERMINISTIC | ASI_ONE_ASSISTED`), `needs_confirmed, confirmation_question, resident_status, communication_status, next_step, duplicate`. Confirming: send `"SI"`/`"YES"` → `needs_confirmed:true` plus `needs`. Unknown sender → 403, case unchanged. Repeated `external_id` → `duplicate:true`.
+- `create_proposal:false` = "show suitable volunteers" (evaluation only).
+- `select` picks a specific volunteer/site (e.g. the next one after a decline). Otherwise B takes the top-ranked.
+- Volunteers who declined this case are excluded.
 
-### 5.5 Matching and assignments
+Eligibility (decision 7 of the plan):
+- org approved and offers TRANSPORT;
+- volunteer approved and `AVAILABLE` for **this** alert, not reserved;
+- resident needs ⊆ `needs_they_can_cater` (code 7 never blocks; code 6 is checked on the shelter);
+- seats, wheelchair spaces and pet capacity fit;
+- resident not in an ORDER/STALE/UNKNOWN zone;
+- route from the volunteer's address doesn't cross an order zone.
 
-**`POST /matches/propose`** (token): evaluate raw offers from the provider agents and optionally create the proposal.
-```json
-{"case_id":"case_maria_001","request_id":"req_001","idempotency_key":"case_maria_001:match:v1",
- "create_proposal":true,"authorization":"SIMULATED_PREAPPROVED",
- "select":{"transport_offer_id":null,"destination_offer_id":null},
- "transport_offers":[{"offer_id":"offer_req_001_transport_org_a","provider_id":"transport_org_a","volunteer_id":"volunteer_sarah",
-   "vehicle_id":"van_a1","provider_agent_address":"agent1q…","wheelchair_accessible":true,"wheelchair_spaces_available":1,
-   "transfer_assistance":true,"oxygen_handling":false,"pets_allowed":true,"seats_available":2,
-   "service_area_zones":["zone_2","zone_3","zone_4"],"eta_minutes":18,"valid_until":"2026-10-17T20:35:00Z"}],
- "destination_offers":[{"offer_id":"offer_req_002_destination_org_a","provider_id":"destination_org_a","destination_id":"dest_center_a",
-   "provider_agent_address":"agent1q…","step_free_entry":true,"accessible_restroom":true,"pets_allowed":true,
-   "service_animals_allowed":true,"beds_available":12,"oxygen_power_outlets":true,"valid_until":"2026-10-17T20:35:00Z"}]}
-```
-- `create_proposal:false` = "show suitable providers" (evaluation only, nothing stored except the evaluation event).
-- `select` picks specific offers (e.g. an alternate after a decline). Otherwise B takes the top-ranked transport + top-ranked destination.
-- Providers that already declined for this case are excluded automatically.
-- Approval, base location and registered capabilities come from B's registry. Offer claims beyond the registry → `CAPABILITY_NOT_REGISTERED`.
+Ranking: distance from volunteer to resident, then `volunteer_id`.
+Shelter: needs (incl. 6) ⊆ site `features`, beds ≥ 1, site outside order zones, nearest first.
 
 Response (201 when a match is created; 200 for evaluation-only, no match, or a repeated key):
 ```json
-{"case_id":"case_maria_001","request_id":"req_001","zone_status":"WARNING",
+{"case_id":"case_maria_001","alert_id":"alert_001","zone_status":"WARNING",
  "evaluation":{
-   "transport":{"eligible":[{"offer_id":"offer_req_001_transport_org_a","provider_id":"transport_org_a","volunteer_id":"volunteer_sarah",
-       "vehicle_id":"van_a1","rank":1,"eta_minutes":18,"distance_km":4.0,
-       "reason_codes":["PROVIDER_APPROVED","VOLUNTEER_APPROVED","IN_SERVICE_AREA","WHEELCHAIR_OK","TRANSFER_OK","PET_OK","AVAILABILITY_CONFIRMED","OUTSIDE_ORDER_ZONE","ROUTE_AVOIDS_CLOSURES"]}],
-     "rejected":[{"offer_id":"offer_req_001_transport_org_b","provider_id":"transport_org_b","reason_codes":["NOT_WHEELCHAIR_ACCESSIBLE","NO_TRANSFER_ASSISTANCE"]}]},
-   "destination":{"eligible":[{"offer_id":"offer_req_002_destination_org_a","provider_id":"destination_org_a","destination_id":"dest_center_a","rank":1,
-       "reason_codes":["PROVIDER_APPROVED","STEP_FREE_OK","PET_OK","CAPACITY_OK","AVAILABILITY_CONFIRMED"]}],"rejected":[]}},
+   "volunteers":{"eligible":[{"org_id":"eastside_rides_demo","volunteer_id":"volunteer_sarah","vehicle_type":"WHEELCHAIR_VAN",
+        "distance_km":4.0,"rank":1,"reason_codes":["ORG_APPROVED","VOLUNTEER_APPROVED","AVAILABLE_FOR_THIS_ALERT","NEEDS_COVERED","WHEELCHAIR_OK","TRANSFER_OK","PET_OK","SEATS_OK","OUTSIDE_ORDER_ZONE","ROUTE_AVOIDS_ORDER_ZONES"]}],
+     "rejected":[{"org_id":"neighbor_sedans_demo","volunteer_id":"volunteer_joe","vehicle_type":"SEDAN","distance_km":0.8,
+        "reason_codes":["NEEDS_NOT_COVERED","NO_WHEELCHAIR_SPACE"],"missing_needs":[1,2]},
+       {"org_id":"red_cross_demo","volunteer_id":"volunteer_maya","reason_codes":["NO_REPLY"]}]},
+   "shelters":{"eligible":[{"org_id":"civic_shelter_demo","site_id":"dest_center_a","distance_km":6.2,"rank":1,
+        "reason_codes":["ORG_APPROVED","STEP_FREE_OK","PET_OK","BEDS_OK","OUTSIDE_ORDER_ZONE"]}],"rejected":[]}},
  "escalation_required":false,"no_match_reason":null,
- "match":{"assignment_id":"assign_001","eligible":true,"status":"PROPOSED","provider_id":"transport_org_a","volunteer_id":"volunteer_sarah",
-   "vehicle_id":"van_a1","destination_provider_id":"destination_org_a","destination_id":"dest_center_a",
-   "reason_codes":["WHEELCHAIR_OK","TRANSFER_OK","PET_OK","OUTSIDE_ORDER_ZONE"],"authorization":"SIMULATED_PREAPPROVED",
-   "route_status":"ILLUSTRATIVE_ONLY","shared_with_provider":{"wheelchair_accessible_vehicle":true,"transfer_assistance":true,
-   "portable_oxygen_equipment":false,"pet_count":1,"service_animal":false,"pickup_area":"zone_3_sector_b_synthetic"},
+ "match":{"assignment_id":"assign_001","status":"PROPOSED","reserved":true,
+   "org_id":"eastside_rides_demo","org_agent_address":"agent1q…","volunteer_id":"volunteer_sarah","vehicle_type":"WHEELCHAIR_VAN",
+   "shelter_org_id":"civic_shelter_demo","shelter_agent_address":"agent1q…","site_id":"dest_center_a",
+   "reason_codes":["NEEDS_COVERED","WHEELCHAIR_OK","TRANSFER_OK","PET_OK","OUTSIDE_ORDER_ZONE"],
+   "authorization":"SIMULATED_PREAPPROVED","route_status":"ILLUSTRATIVE_ONLY",
+   "shared_with_volunteer":{"needs":[1,2,4],"pet_count":1,"language":"es","pickup_area":"zone_3_sector_b (synthetic)"},
+   "eta_estimate":{"minutes":18,"label":"Illustrative estimate, not a guarantee"},
    "idempotency_key":"case_maria_001:match:v1"},
  "duplicate":false}
 ```
-No match (David, or nothing eligible): HTTP 200, `match:null`, `escalation_required:true`, `no_match_reason` ∈ `ORDER_ZONE | ZONE_STALE | ZONE_UNKNOWN | NO_ELIGIBLE_TRANSPORT | NO_ELIGIBLE_DESTINATION`. When transport is unresolvable, the case moves to `REQUIRES_COORDINATOR`.
-A `select`ed offer that fails → 409 (`UNSAFE_ZONE`, `ZONE_STALE`, `PROVIDER_NOT_APPROVED`, `OFFER_NOT_ELIGIBLE`).
-The exact pickup point is **never** in this response; it's released only on transport acceptance.
+- **No match:** HTTP 200, `match:null`, `escalation_required:true`, `no_match_reason` ∈ `ORDER_ZONE | ZONE_STALE | ZONE_UNKNOWN | NO_AVAILABLE_VOLUNTEER | NO_SUITABLE_VOLUNTEER | NO_SHELTER`. Unresolvable transport moves the case to `REQUIRES_COORDINATOR`.
+- **Reservation:** creating the match reserves the volunteer atomically. If another case got them first, B moves on to the next eligible volunteer.
+- A `select`ed volunteer or site that fails → 409 (`UNSAFE_ZONE`, `ZONE_STALE`, `ALREADY_RESERVED`, `NOT_ELIGIBLE`).
+- The pickup point is never in this response.
 
-**`POST /assignments/{assignment_id}/accept`** (token): the Coordinator forwards a provider agent's `AcceptResponse`. The transport **or** destination provider of the match responds on the same `assignment_id`.
+**`POST /assignments/{assignment_id}/accept`** (token + `X-Org-Agent`): an org agent forwards its volunteer's decision (transport), or a shelter org agent confirms the bed. Both use the same `assignment_id`.
 ```json
-{"provider_id":"transport_org_a","volunteer_id":"volunteer_sarah","provider_agent_address":"agent1q…",
- "decision":"ACCEPTED","reason":"SIMULATED_PROVIDER_ACCEPTED","idempotency_key":"assign_001:accept:transport_org_a"}
+{"org_id":"eastside_rides_demo","volunteer_id":"volunteer_sarah","decision":"ACCEPTED","idempotency_key":"assign_001:accept:volunteer_sarah"}
 ```
+Shelter: `{"org_id":"civic_shelter_demo","site_id":"dest_center_a","decision":"ACCEPTED",…}`.
 Response:
 ```json
-{"assignment_id":"assign_001","case_id":"case_maria_001","responding_provider_id":"transport_org_a","service_type":"accessible_transport",
- "provider_response":"ACCEPTED","assignment_status":"ACCEPTED","resident_status":"PROVIDER_ACCEPTED",
- "pickup_details":{"pickup_point":"SYNTHETIC: Zone 3 Sector B meeting point 4"},
- "eta":{"minutes":18,"label":"Illustrative estimate, not a guarantee"},
- "confirmed_pickup_at":null,"confirmed_arrival_at":null,"next_alternate":null,
- "next_step":"Transport accepted; destination acceptance still needed before arrival.","duplicate":false}
+{"assignment_id":"assign_001","case_id":"case_maria_001","responding":"volunteer","org_id":"eastside_rides_demo","volunteer_id":"volunteer_sarah",
+ "decision":"ACCEPTED","assignment_status":"ACCEPTED","resident_status":"PROVIDER_ACCEPTED",
+ "pickup_details":{"pickup_point":"SYNTHETIC: Zone 3 Sector B meeting point 4","resident_phone":"sim_phone_maria"},
+ "help_on_the_way_sent":true,"eta":{"minutes":18,"label":"Illustrative estimate, not a guarantee"},
+ "next_alternate":null,"next_step":"Shelter confirmation and route preview pending.","duplicate":false}
 ```
-- `DECLINED` → `assignment_status: DECLINED`. The resident stays `NEEDS_ASSISTANCE`, and `next_alternate: {"offer_id","provider_id"}` names the next eligible offer (call `matches/propose` with `select`). If none is left → `REQUIRES_COORDINATOR`.
-- A reply to a `CANCELED`/`DECLINED` assignment → 409 `INVALID_TRANSITION`.
-- A provider/volunteer mismatch → 403.
-- The resident status changes **only** on transport acceptance. Arrival later requires the destination to have accepted too.
+- **Volunteer `ACCEPTED`:** the resident status moves to PROVIDER_ACCEPTED. B sends the resident `DOORSTEP DEMO: A volunteer has accepted and is on the way (simulated). Estimated arrival about 18 minutes. This is an estimate, not a guarantee.` Pickup details go **only** to that org agent.
+- **`DECLINED`:** the reservation is released, the resident stays `NEEDS_ASSISTANCE`, and `next_alternate: {"volunteer_id","org_id"}` names the next eligible volunteer (call `matches/propose` with `select`). If none is left → `REQUIRES_COORDINATOR`.
+- **Shelter acceptance** does not change the resident status. Arrival requires it.
+- A reply to a `CANCELED`/`DECLINED` assignment → 409 `INVALID_TRANSITION`. Wrong org or volunteer → 403.
 
 **`POST /assignments/{assignment_id}/pickup`** (token)
 ```json
-{"evidence":{"type":"PROVIDER_AND_RESIDENT_CONFIRMATION","provider_confirmed":true,"resident_confirmed":true,
-  "caregiver_confirmed":false,"code_verified":true,"source":"SIMULATED","provider_report_id":"pickup_rep_001",
-  "confirmations":[{"party":"transport_provider","party_id":"transport_org_a"},{"party":"resident","party_id":"resident_001"}]},
+{"evidence":{"type":"VOLUNTEER_AND_RESIDENT_CONFIRMATION","volunteer_confirmed":true,"resident_confirmed":true,
+  "caregiver_confirmed":false,"code_verified":true,"source":"SIMULATED","report_id":"pickup_rep_001",
+  "confirmations":[{"party":"volunteer","party_id":"volunteer_sarah"},{"party":"resident","party_id":"resident_001"}]},
  "idempotency_key":"assign_001:pickup"}
 ```
-Required: provider **and** (resident **or** caregiver). `confirmations` is optional; when present, every `party_id` must match the case's real participants. A code helps confirm contact; it never proves safety.
+Required: volunteer **and** (resident **or** caregiver/emergency contact). If `confirmations` is given, every `party_id` must match the real participants. A code helps confirm contact; it never proves safety.
 
 **`POST /assignments/{assignment_id}/arrival`** (token)
 ```json
-{"evidence":{"type":"DESTINATION_CHECKIN","destination_provider_id":"destination_org_a","destination_id":"dest_center_a",
-  "provider_confirmed":true,"source":"SIMULATED","provider_report_id":"arrival_rep_001"},"idempotency_key":"assign_001:arrival"}
+{"evidence":{"type":"SHELTER_CHECKIN","shelter_org_id":"civic_shelter_demo","site_id":"dest_center_a","shelter_confirmed":true,
+  "source":"SIMULATED","report_id":"arrival_rep_001"},"idempotency_key":"assign_001:arrival"}
 ```
-Required: pickup already confirmed, the destination provider **accepted**, and a check-in by that destination provider (or resident/caregiver + transport provider).
+Required: pickup already confirmed, the shelter **accepted**, and a check-in by that shelter (or resident/caregiver + volunteer). On arrival B releases the volunteer's reservation and asks the resident (simulated SMS) whether they need further help.
 Pickup/arrival response: `assignment_id, case_id, assignment_status, resident_status, confirmed_pickup_at, confirmed_arrival_at, map, next_step, duplicate`. Green only after arrival.
 
-### 5.6 Escalation (Escalation Simulator agent ↔ B)
+### 5.7 Escalation (Escalation agent ↔ B)
 
 **`POST /cases/{case_id}/escalate`** (token) → 201
-```json
-{"reason":"ACTIVE_EVACUATION_ORDER_ZONE","idempotency_key":"case_david_002:escalation:v1"}
-```
-`reason` ∈ `ACTIVE_EVACUATION_ORDER_ZONE` (case must be in an ORDER zone), `NO_ELIGIBLE_PROVIDER`, `PROVIDER_TIMEOUT`, `NO_REPLY_AFTER_DEADLINE` (communication status must match), `COORDINATOR_REQUESTED`.
+`{"reason":"ACTIVE_EVACUATION_ORDER_ZONE","idempotency_key":"case_david_002:escalation:v1"}`
+`reason` ∈ `ACTIVE_EVACUATION_ORDER_ZONE` (case must be in an ORDER zone), `NO_AVAILABLE_VOLUNTEER`, `NO_SUITABLE_VOLUNTEER`, `VOLUNTEER_TIMEOUT`, `NO_REPLY_AFTER_DEADLINE`, `COORDINATOR_REQUESTED`.
 ```json
 {"escalation_id":"esc_001","case_id":"case_david_002","reason":"ACTIVE_EVACUATION_ORDER_ZONE",
  "recipient":"SIMULATED_AUTHORIZED_RESPONSE_SERVICE","status":"REQUESTED","assistance_confirmed":false,
- "case_summary_for_recipient":{"case_id":"case_david_002","zone_id":"zone_3","zone_status":"ORDER","preferred_language":"en",
-   "wheelchair_accessible_vehicle":true,"portable_oxygen_equipment":false,"pet_count":0},
+ "case_summary_for_recipient":{"case_id":"case_david_002","zone_id":"zone_3_sector_a","zone_status":"ORDER","language":"en","needs":[1]},
  "resident_status":"REQUIRES_COORDINATOR","assignment_status":"UNRESOLVED",
  "next_step":"Awaiting simulated authorized service acknowledgment; assistance not confirmed."}
 ```
-If `AUTO_ESCALATION_ACK=true` (no escalation agent running, e.g. the smoke test), B acknowledges immediately and returns `status: ACKNOWLEDGED_REQUEST_ONLY`.
+`AUTO_ESCALATION_ACK=true` (no Escalation agent running) acknowledges immediately.
 
-**`POST /escalations/{escalation_id}/ack`** (token): the Coordinator forwards the Escalation agent's `EscalationAck`.
+**`POST /escalations/{escalation_id}/ack`** (token): `{"status":"ACKNOWLEDGED_REQUEST_ONLY","recipient_agent_address":"agent1q…","idempotency_key":"esc_001:ack"}` → `{"escalation_id":"esc_001","status":"ACKNOWLEDGED_REQUEST_ONLY","assistance_confirmed":false,"resident_status":"REQUIRES_COORDINATOR","assignment_status":"UNRESOLVED","next_step":"…"}`. `assistance_confirmed` is always false.
+
+### 5.8 Post-calamity help (Post-Calamity agent ↔ B)
+
+**`POST /cases/{case_id}/recovery`** (token) → 201. Called after arrival, once the resident says they want further help.
 ```json
-{"status":"ACKNOWLEDGED_REQUEST_ONLY","recipient_agent_address":"agent1q…","idempotency_key":"esc_001:ack"}
+{"consent":{"share_recovery_needs":true,"granted_by":"RESIDENT","granted_at":"…"},
+ "help_types":["TEMPORARY_HOUSING","INSURANCE_GUIDANCE"],"idempotency_key":"case_maria_001:recovery:v1"}
 ```
-→ `{"escalation_id":"esc_001","status":"ACKNOWLEDGED_REQUEST_ONLY","assistance_confirmed":false,"resident_status":"REQUIRES_COORDINATOR","assignment_status":"UNRESOLVED","next_step":"Coordinator follows up with simulated authorized response service; assistance not confirmed."}`
-`assistance_confirmed` is **always** false.
-
-### 5.7 Recovery (Recovery Provider agent ↔ B)
-
-**`POST /cases/{case_id}/recovery`** (token) → 201
+B matches approved orgs whose `recovery_services` include each help type (nearest first) and creates one referral per help type:
 ```json
-{"consent":{"share_recovery_needs":true,"granted_by":"RESIDENT","granted_at":"2026-10-17T20:40:00Z"},
- "need_type":"TEMPORARY_ACCOMMODATION","idempotency_key":"case_maria_001:recovery:v1"}
+{"case_id":"case_maria_001","referrals":[
+   {"referral_id":"ref_001","help_type":"TEMPORARY_HOUSING","org_id":"recovery_housing_demo","agent_address":"agent1q…","status":"REQUESTED",
+    "shared_payload":{"referral_id":"ref_001","help_type":"TEMPORARY_HOUSING","language":"es","needs":[1,6],"pet_count":1}},
+   {"referral_id":"ref_002","help_type":"INSURANCE_GUIDANCE","org_id":"red_cross_demo","agent_address":"agent1q…","status":"REQUESTED",
+    "shared_payload":{"referral_id":"ref_002","help_type":"INSURANCE_GUIDANCE","language":"es"}}],
+ "unmatched_help_types":[],"housing_secured":false}
 ```
+- `shared_payload` is exactly what the Post-Calamity agent may forward; it's per help type and minimal.
+- `share_recovery_needs:false` → 409 `CONSENT_MISSING`, recorded as `NOT_REQUESTED`, nothing shared.
+- B never files claims or applications; `INSURANCE_GUIDANCE` is a referral to a (simulated) helper org.
+
+**`POST /recovery/{referral_id}/respond`** (token + `X-Org-Agent`): `{"org_id":"recovery_housing_demo","decision":"ACCEPTED","evidence":null,"idempotency_key":"ref_001:respond:accepted"}`
+- `decision` ∈ `ACCEPTED | DECLINED (→UNRESOLVED) | COMPLETED`.
+- `COMPLETED` requires `evidence: {"type":"SIMULATED_SERVICE_CONFIRMED","reference":"…"}`.
+- → `{"referral_id":"ref_001","status":"ACCEPTED","housing_secured":false}`. `housing_secured` is true only for a COMPLETED `TEMPORARY_HOUSING` referral with evidence (still simulated).
+
+### 5.9 Road closures (News agent ↔ B)
+- **`GET /demo/feeds/news`** → `{"items":[{"item_id":"news_001","source_name":"Fictional Valley Gazette (DEMO)","url":null,"published_at":"…","headline":"Residents report Canyon Rd blocked by debris (DEMO)","body":"…"}]}`
+- **`GET /demo/feeds/closures`** (synthetic **official**) → `{"closures":[{"closure_id":"off_001","issuing_authority":"SIMULATED_LA_COUNTY_PUBLIC_WORKS","road_name":"Ridge Ave","status":"CLOSED","published_at":"…","expires_at":"…"}]}`
+- **`POST /demo/closures/trigger`** (token): `{"action":"PUBLISH_OFFICIAL"|"LIFT_OFFICIAL"|"PUBLISH_NEWS","road_name":"…","headline":"…","body":"…"}`
+- **`POST /closures/ingest`** (token):
 ```json
-{"referral_id":"ref_001","case_id":"case_maria_001","status":"REQUESTED","provider_id":"recovery_org_demo",
- "shared_fields":["destination_accessibility","pet_count","preferred_language","service_animal","wheelchair_accessible_vehicle"],
- "shared_payload":{"referral_id":"ref_001","need_type":"TEMPORARY_ACCOMMODATION","preferred_language":"es",
-   "wheelchair_accessible_vehicle":true,"destination_accessibility":["step_free_entry"],"pet_count":1,"service_animal":false},
- "housing_secured":false}
-```
-`shared_payload` is exactly what the Coordinator may forward to the Recovery agent, nothing more. `granted_by`: `RESIDENT | CAREGIVER`. `share_recovery_needs:false` → 409 `CONSENT_MISSING`, recorded as `NOT_REQUESTED`, nothing shared.
-
-**`POST /recovery/{referral_id}/respond`** (token): forwards the Recovery agent's decision.
-```json
-{"provider_id":"recovery_org_demo","decision":"ACCEPTED","evidence":null,"idempotency_key":"ref_001:respond:accepted"}
-```
-`decision`: `ACCEPTED | DECLINED` (→ `UNRESOLVED`) `| COMPLETED`. `COMPLETED` requires `evidence: {"type":"SIMULATED_RESERVATION_CONFIRMED","reference":"res_sim_001"}`.
-→ `{"referral_id":"ref_001","status":"ACCEPTED","housing_secured":false}`. `housing_secured` is true **only** for COMPLETED with that evidence (still simulated).
-
-### 5.8 Road closures (News agent ↔ B)
-
-**`GET /demo/feeds/news`** → `{"items":[{"item_id":"news_001","source_name":"Fictional Valley Gazette (DEMO)","url":null,"published_at":"…","headline":"Residents report Canyon Rd blocked by debris (DEMO)","body":"…"}]}`
-
-**`GET /demo/feeds/closures`** (synthetic **official** closures)
-→ `{"closures":[{"closure_id":"off_001","issuing_authority":"SIMULATED_LA_COUNTY_PUBLIC_WORKS","road_name":"Ridge Ave","segment_description":"between Zone 3 Sector B and Zone 4","status":"CLOSED","published_at":"…","updated_at":"…","expires_at":"…"}]}`
-
-**`POST /demo/closures/trigger`** (token): `{"action":"PUBLISH_OFFICIAL","road_name":"Ridge Ave","status":"CLOSED"}`. `action` ∈ `PUBLISH_OFFICIAL | LIFT_OFFICIAL | PUBLISH_NEWS` (with `headline`, `body`).
-
-**`POST /closures/ingest`** (token): the News agent posts extracted items.
-```json
-{"source":{"source_id":"SYNTHETIC_NEWS","source_type":"NEWS","url":"http://127.0.0.1:8000/demo/feeds/news","fetched_at":"…"},
- "items":[{"source_item_id":"news_001","published_at":"…","url":null,"headline":"Residents report Canyon Rd blocked by debris (DEMO)",
-   "raw_text":"…","extraction_method":"ASI_ONE_EXTRACTION",
+{"source":{"source_id":"SYNTHETIC_NEWS","source_type":"NEWS","url":"…","fetched_at":"…"},
+ "items":[{"source_item_id":"news_001","published_at":"…","headline":"…","raw_text":"…","extraction_method":"ASI_ONE_EXTRACTION",
    "candidate":{"road_name":"Canyon Rd","claimed_status":"CLOSED","location_text":"near Zone 3"}}],
  "idempotency_key":"SYNTHETIC_NEWS:news_001"}
 ```
-`extraction_method`: `STRUCTURED_FEED` (official feed fields) or `ASI_ONE_EXTRACTION` (LLM read the article).
-**B sets `state` by fixed rules; the agent never sends a state:**
-- `OFFICIAL_SIMULATION` + CLOSED → `OFFICIAL_CONFIRMED`; `NEWS` / `REAL_WORLD_CONTEXT` → `UNVERIFIED_REPORT`;
-- contradictory active claims about the same segment from different sources → `CONFLICTING`;
-- past expiry or lifted → `EXPIRED`;
-- road names map to synthetic segments via B's gazetteer. Unmapped names are kept and shown, but never used for routing;
-- `REAL_WORLD_CONTEXT` is display-only.
+  **B sets `state`; the agent never does:**
+  - `OFFICIAL_SIMULATION` + CLOSED → `OFFICIAL_CONFIRMED`; `NEWS` / `REAL_WORLD_CONTEXT` → `UNVERIFIED_REPORT`;
+  - contradictory active claims about one segment → `CONFLICTING`; expired or lifted → `EXPIRED`;
+  - a gazetteer maps road names to segments; unmapped names are shown but never used for routing.
 
-Response: `{"ingest_id":"cl_ingest_002","accepted":[{"closure_id":"closure_002","state":"UNVERIFIED_REPORT","segment_id":"seg_canyon_rd"}],"rejected":[],"new_official_closures":[],"notify_coordinator":true,"duplicate":false}`.
+  → `{"accepted":[{"closure_id":"closure_002","state":"UNVERIFIED_REPORT","segment_id":"seg_canyon_rd"}],"rejected":[],"new_official_closures":[],"notify_coordinator":true}`
+- **`GET /closures`** → closures with `state, claimed_status, used_for_routing, sources[{source_type, url, published_at, headline}], expires_at`, plus `"note":"No report does not mean a road is open."`
 
-**`GET /closures`**
-```json
-{"closures":[{"closure_id":"closure_001","road_name":"Ridge Ave","segment_id":"seg_ridge_ave","state":"OFFICIAL_CONFIRMED",
-  "claimed_status":"CLOSED","used_for_routing":true,
-  "sources":[{"source_id":"SYNTHETIC_OFFICIAL_CLOSURES","source_type":"OFFICIAL_SIMULATION","url":null,"published_at":"…","headline":"Ridge Ave closed (SIMULATED)"}],
-  "first_seen_at":"…","updated_at":"…","expires_at":"…"}],
- "note":"No report does not mean a road is open."}
-```
+### 5.10 Routes (Route agent ↔ B ↔ HERE)
 
-### 5.9 Routes (Route Planner agent ↔ B ↔ HERE)
-
-**`POST /routes/constraints`** (token)
-```json
-{"case_id":"case_maria_001","destination":{"destination_id":"dest_center_a"},"idempotency_key":"case_maria_001:route:v1"}
-```
+**`POST /routes/constraints`** (token): `{"assignment_id":"assign_001","idempotency_key":"assign_001:route:v1"}`
 → OK:
 ```json
-{"route_request_id":"route_001","status":"OK","origin":{"lat":34.1012,"lon":-118.0964,"label":"Synthetic pickup area"},
- "destination":{"lat":34.0890,"lon":-118.0700,"label":"Civic Center (fictional)"},
+{"route_request_id":"route_001","status":"OK",
+ "stops":[{"role":"VOLUNTEER_START","lat":34.095,"lon":-118.110,"label":"Volunteer start (synthetic)"},
+          {"role":"PICKUP","lat":34.1012,"lon":-118.0964,"label":"Synthetic pickup area"},
+          {"role":"SHELTER","lat":34.089,"lon":-118.070,"label":"Civic Center (fictional)"}],
  "avoid_areas":[{"kind":"ORDER_ZONE","id":"alert_002","geometry":{"type":"Polygon","coordinates":[…]}},
                 {"kind":"OFFICIAL_CLOSURE","id":"closure_001","geometry":{"type":"Polygon","coordinates":[…]}}],
  "cautions":[{"closure_id":"closure_002","state":"UNVERIFIED_REPORT","road_name":"Canyon Rd","geometry":{…}}],
- "max_avoid_areas":20,"data_as_of":"…","label":"ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"}
+ "max_avoid_areas":250,"data_as_of":"…","label":"ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"}
 ```
-→ refused (409 `ROUTE_REFUSED`, `reasons` ∈ `ORDER_ZONE` (origin or destination inside an order) `| ZONE_STALE | ZONE_UNKNOWN | TOO_MANY_AVOID_AREAS`). B refuses rather than truncate.
-Closure lines are buffered into polygons by B, so HERE gets areas.
+Refused → 409 `ROUTE_REFUSED`, `reasons` ∈ `ORDER_ZONE` (a stop is inside an order) `| ZONE_STALE | ZONE_UNKNOWN | TOO_MANY_AVOID_AREAS | ASSIGNMENT_NOT_ACCEPTED`. B refuses rather than truncate. Closure lines are buffered into polygons by B.
 
-**`POST /routes/previews`** (token): the Route agent submits HERE's result for B's post-check.
-```json
-{"route_request_id":"route_001","provider":"HERE","polyline":{"type":"LineString","coordinates":[[-118.0964,34.1012],…]},
- "distance_m":6200,"duration_s":840,"provider_notices":[],"computed_at":"…","idempotency_key":"route_001:preview"}
-```
-`polyline: null` (HERE found no route) → `NO_ROUTE_CONFIRMED`.
-```json
-{"route_preview_id":"rprev_001","route_request_id":"route_001","status":"ILLUSTRATIVE_ONLY","refusal_reason":null,
- "crosses":[],"cautions_on_path":["closure_002"],"distance_m":6200,"duration_s":840,
- "eta_label":"Estimate only, not a guarantee","label":"ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"}
-```
-`REFUSED` when the polyline intersects any ORDER polygon or official closure (`crosses` lists them), or data went stale since the constraints. Recorded on the case timeline. **Never** described as safe.
+**`POST /routes/previews`** (token):
+`{"route_request_id":"route_001","provider":"HERE","polyline":{"type":"LineString","coordinates":[…]},"distance_m":9800,"duration_s":1080,"provider_notices":[],"computed_at":"…","idempotency_key":"route_001:preview"}`
+(`polyline:null` → `NO_ROUTE_CONFIRMED`)
+→ `{"route_preview_id":"rprev_001","status":"ILLUSTRATIVE_ONLY","crosses":[],"cautions_on_path":["closure_002"],"eta":{"minutes":18,"label":"Illustrative estimate, not a guarantee"},"label":"ILLUSTRATIVE ROUTE ONLY - NOT FOR LIVE EVACUATION"}`
+- `REFUSED` if the polyline intersects any ORDER polygon or official closure (listed in `crosses`), or if data went stale.
+- On `ILLUSTRATIVE_ONLY`, B updates the case ETA (still an estimate).
+- Never described as safe. Directions go to the volunteer's org agent only.
 
-### 5.10 Card data (A renders, B supplies)
+### 5.11 Card data
+- **`GET /dashboard/summary`** → `{"counts_by_status":[{"status","count","color","label"}],"unresolved":[{"case_id","display_name","reason","next_step"}],"alerts":{"active_order","active_warning","feed_freshness","last_ingest_at"},"outreach":{"orgs_contacted","volunteers_available","volunteers_no_reply"},"closures":{"official_confirmed","unverified","conflicting"},"generated_at","simulated":true}`
+- **`GET /dashboard/cases`** → `{"cases":[{"case_id","display_name","zone_status","resident_status","map","coarse_location":{"lat":34.10,"lon":-118.10},"unresolved","updated_at"}]}`. Coordinates are rounded to 2 decimals.
+- Plus `GET /alerts/active`, `GET /alerts/{id}/outreach`, `GET /organizations`, `GET /closures`, `GET /cases/{id}`.
 
-**`GET /dashboard/summary`**
-```json
-{"generated_at":"…","simulated":true,
- "counts_by_status":[{"status":"NEEDS_ASSISTANCE","count":0,"color":"red","label":"Assistance needed"},
-                     {"status":"ARRIVAL_CONFIRMED","count":1,"color":"green","label":"Arrival confirmed at agreed destination"},
-                     {"status":"REQUIRES_COORDINATOR","count":1,"color":"black","label":"Coordinator attention: assistance not confirmed"}],
- "unresolved":[{"case_id":"case_david_002","display_name":"David (synthetic)","reason":"ACTIVE_EVACUATION_ORDER_ZONE","next_step":"…"}],
- "alerts":{"active_order":1,"active_warning":1,"feed_freshness":"FRESH","last_ingest_at":"…"},
- "closures":{"official_confirmed":1,"unverified":1,"conflicting":0}}
-```
-**`GET /dashboard/cases`** → `{"cases":[{"case_id","display_name","zone_id","zone_status","resident_status","map","coarse_location":{"lat":34.10,"lon":-118.10},"unresolved","updated_at"}]}`. Coordinates are rounded to 2 decimals; no pickup points.
-
-### 5.11 Simulator hooks (B; tests and demo)
-
-`POST /sim/inbound {sender, text, external_id?, language?}` (routes by sender; unknown → 403) · `POST /sim/delivery {message_id, delivered}` · `POST /sim/cases/{case_id}/no-reply-deadline` · `GET /sim/messages?case_id=`.
+### 5.12 Simulator hooks (B; tests and demo)
+- `POST /sim/inbound {sender, text, external_id?, language?}`: routes by sender to a resident (case reply) **or a volunteer** (availability for the current alert). Unknown sender → 403.
+- `POST /sim/delivery {message_id, delivered}`.
+- `POST /sim/cases/{case_id}/no-reply-deadline`.
+- `POST /sim/outreach/{alert_id}/deadline`.
+- `GET /sim/messages?case_id=&volunteer_id=`.
 
 ## 6. Fetch.ai agent messages (A owns `integrations/fetch_adapter.py`; listed so both sides align)
 
-All carry `schema_version, correlation_id, created_at`, plus `case_id` / `idempotency_key` where relevant. Providers receive **only** consent-scoped fields (`shared_with_provider`, `shared_payload`, `case_summary_for_recipient`).
+All carry `schema_version, correlation_id, created_at`, plus `case_id` / `alert_id` / `idempotency_key` where relevant. Agents receive only consent-scoped fields (`shared_with_volunteer`, `shared_payload`, `case_summary_for_recipient`).
 
-| Message | From → To | Key fields | B endpoint it feeds |
+| Message | From → To | Key fields | B endpoint involved |
 |---|---|---|---|
-| `AlertNotification` | Calamity → Coordinator | `ingest_id, new_alerts, affected_cases` | (result of `/alerts/ingest`) |
-| `ClosureNotification` | News → Coordinator | `ingest_id, new_official_closures, new_reports` | (result of `/closures/ingest`) |
-| `OfferRequest` / `OfferResponse` | Coordinator ↔ Transport/Destination | `request_id, service_type, zone_id, requirements` / `offers[]` | `/matches/propose` |
-| `AcceptRequest` / `AcceptResponse` | Coordinator ↔ provider | `assignment_id, offer_id, provider_id, shared_needs` / `decision, reason` | `/assignments/{id}/accept` |
-| `PickupReport` | Transport → Coordinator | `assignment_id, provider_id, report_id, code_verified` | `/assignments/{id}/pickup` (+ resident confirmation) |
-| `ArrivalReport` | Destination → Coordinator | `assignment_id, destination_provider_id, destination_id, report_id` | `/assignments/{id}/arrival` |
-| `RecoveryRequest` / `RecoveryResponse` | Coordinator ↔ Recovery | `referral_id, shared_payload` / `decision, evidence` | `/recovery/{id}/respond` |
-| `EscalationRequest` / `EscalationAck` | Coordinator ↔ Escalation | `escalation_id, case_summary_for_recipient` / `status` | `/escalations/{id}/ack` |
-| `RouteRequest` / `RouteResponse` | Coordinator ↔ Route | `case_id, destination_id` / `route_preview` | `/routes/constraints`, `/routes/previews` |
+| `AlertNotification` | Calamity → Doorstep | `ingest_id, new_alerts, affected_cases, outreach_orgs` | `/alerts/ingest` |
+| `OutreachRequest` / `OutreachResult` | Doorstep ↔ Organization agent | `alert_id, calamity_type, zone_id` / `asked, available[volunteer_id], unavailable, no_reply` | `/orgs/{id}/outreach`, `/orgs/{id}/volunteers` |
+| `MatchRequest` / `MatchResult` | Doorstep ↔ Matching | `case_id, create_proposal, select` / B's match response | `/matches/propose` |
+| `AcceptRequest` / `AcceptResponse` | Doorstep ↔ Organization agent (volunteer or shelter) | `assignment_id, volunteer_id or site_id, shared_with_volunteer` / `decision` | `/assignments/{id}/accept` |
+| `PickupReport` | Organization agent (volunteer) → Doorstep | `assignment_id, volunteer_id, report_id, code_verified` | `/assignments/{id}/pickup` (+ resident confirmation) |
+| `ArrivalReport` | Organization agent (shelter) → Doorstep | `assignment_id, shelter_org_id, site_id, report_id` | `/assignments/{id}/arrival` |
+| `ClosureNotification` | News → Doorstep | `new_official_closures, new_reports` | `/closures/ingest` |
+| `RouteRequest` / `RouteResponse` | Doorstep ↔ Route | `assignment_id` / `route_preview` | `/routes/constraints`, `/routes/previews` |
+| `RecoveryRequest` / `RecoveryResponse` | Post-Calamity ↔ recovery org agent | `referral_id, shared_payload` / `decision, evidence` | `/cases/{id}/recovery`, `/recovery/{id}/respond` |
+| `EscalationRequest` / `EscalationAck` | Doorstep ↔ Escalation | `escalation_id, case_summary_for_recipient` / `status` | `/escalations/{id}/ack` |
 
 ## 7. Environment variables
 
@@ -453,40 +459,64 @@ All carry `schema_version, correlation_id, created_at`, plus `case_id` / `idempo
 | `DOORSTEP_API_URL` | A | `http://127.0.0.1:8000` |
 | `DEMO_AUTH_TOKEN` | both | `change-me-local-demo-token` |
 | `SIMULATION_MODE` | B | `true` (backend refuses otherwise) |
+| `MONGODB_URI` | B | `mongodb://localhost:27017` |
+| `MONGODB_USERS_DB` / `MONGODB_ORGS_DB` | B | `doorstep_users` / `doorstep_orgs` |
+| `USE_MONGOMOCK` | B | `false` (`true` in tests and the smoke test) |
 | `ALERT_FEED_URL` | A (Calamity) | `${DOORSTEP_API_URL}/demo/feeds/caloes` |
 | `ALERT_POLL_INTERVAL_SECONDS` | A (Calamity) | `120` |
-| `ALERT_STALE_AFTER_SECONDS` | B | `900` (demo may lower it) |
+| `ALERT_STALE_AFTER_SECONDS` | B | `900` |
+| `OUTREACH_MAX_ORGS` | B | `3` |
+| `AWARENESS_RADIUS_KM` | B | `5` |
 | `AUTO_ESCALATION_ACK` | B | `true` locally; `false` when the Escalation agent runs |
-| `USE_LLM_INTENT` | B (extraction) / A (intent) | `false` |
-| `ASI_ONE_API_KEY` | A, B | — (never committed) |
-| `HERE_API_KEY` | A (Route) | — (never committed) |
+| `USE_LLM_INTENT` | A, B | `false` |
+| `ASI_ONE_API_KEY`, `HERE_API_KEY` | A (B for extraction) | never committed |
 | `NEWS_POLL_INTERVAL_SECONDS` | A (News) | `120` |
 
 ## 8. Migration from v1.0
 
 | v1.0 | v2.0 |
 |---|---|
-| `POST /demo/warnings` | `POST /demo/alerts/trigger` (+ Calamity agent → `POST /alerts/ingest`) |
-| `POST /cases/{id}/transport/evaluate` + `/destination/evaluate` + `POST /cases/{id}/assignments` | `POST /matches/propose` |
-| `POST /assignments/{id}/acceptance` | `POST /assignments/{id}/accept` |
-| `POST /cases/{id}/escalations` | `POST /cases/{id}/escalate` (+ `POST /escalations/{id}/ack`) |
-| `POST /cases/{id}/recovery-referrals` | `POST /cases/{id}/recovery` (+ `POST /recovery/{id}/respond`) |
-| `zone_rule` (`OUTSIDE_ACTIVE_ORDER`…) | `zone_status` (`ORDER`, `WARNING`, …) from geofencing |
+| SQLite, one DB | MongoDB, `doorstep_users` + `doorstep_orgs` |
+| Transport/Destination agents send raw offers from their own inventory | Organization agents (one per org) run volunteer outreach; **B matches against org-DB volunteers** |
+| `POST /demo/warnings` | `POST /demo/alerts/trigger` + Calamity agent → `POST /alerts/ingest` |
+| `/cases/{id}/transport/evaluate`, `/destination/evaluate`, `POST /cases/{id}/assignments` | `POST /matches/propose` |
+| `POST /assignments/{id}/acceptance` | `POST /assignments/{id}/accept` (with `X-Org-Agent`) |
+| `POST /cases/{id}/escalations` | `POST /cases/{id}/escalate` + `POST /escalations/{id}/ack` |
+| `POST /cases/{id}/recovery-referrals` (housing only) | `POST /cases/{id}/recovery` (help types) + `POST /recovery/{id}/respond` |
+| boolean needs fields | integer needs codes (§2) |
+| `zone_rule` | `zone_status` from polygons |
 | `service_status` | `assignment_status` |
-| `rejected[].reasons` / `match_reasons` | `reason_codes` (§4) |
-| `schema_version: "1.0"` | `"2.0"` |
+| evidence `provider_confirmed` / `DESTINATION_CHECKIN` | `volunteer_confirmed` / `SHELTER_CHECKIN` |
 
-Unchanged: auth header, `X-Correlation-ID`, error shape, `/health`, `/demo/reset`, `GET /cases`, `GET /cases/{id}` (extended), `POST /cases/{id}/responses`, pickup and arrival paths, `/sim/*`, case and resident IDs. **v1 routes are removed in the same PR window as A's client switch** (plan §6.2).
+Unchanged: Bearer auth, `X-Correlation-ID`, error shape, `/health`, `/demo/reset`, `GET /cases`, `GET /cases/{id}` (extended), `POST /cases/{id}/responses`, pickup/arrival paths, `/sim/*`, case and resident IDs. **v1 routes are removed in the same PR window as A's client switch.**
 
-## 9. Seed data (fixed IDs, all fictional)
+## 9. Database documents (B; for reference)
+
+`doorstep_users`:
+- `residents`: §5.2 shape, with `_id` = `resident_id`.
+- `cases`, `communications`, `assignments`, `escalations`, `recovery_requests`, `alerts`, `closures`, `route_previews`.
+- `events`: append-only timeline, `seq` from `counters`.
+
+`doorstep_orgs`:
+- `organizations`: §5.2 shape with embedded `volunteers[]`, which add `availability: {alert_id, state, responded_at}` and `reserved_case_id`.
+- `provider_events`: reservations/decisions with unique dedupe keys.
+- `counters`.
+
+Atomic patterns:
+- volunteer reservation = conditional `update_one` (`availability.state == AVAILABLE`, `reserved_case_id == null`);
+- acceptance = `find_one_and_update` on the assignment's status;
+- partial unique index on accepted assignments per case and service;
+- compensating release if a step fails after reservation.
+
+## 10. Seed data (fixed IDs, all fictional)
 
 | Kind | IDs |
 |---|---|
-| Residents / cases | `resident_001` / `case_maria_001` "Maria (synthetic)", es, `sim_phone_maria`, inside the zone 3 **WARNING** polygon, wheelchair + transfer help + 1 dog, step-free destination. `resident_002` / `case_david_002` "David (synthetic)", en, `sim_phone_david`, caregiver `caregiver_002` (`sim_phone_david_caregiver`), inside the zone 3 sector A **ORDER** polygon, wheelchair |
-| Transport orgs | `transport_org_a` (approved, `van_a1`, `volunteer_sarah`, the match), `transport_org_b` (closer sedan `sedan_b1`, not accessible), `transport_org_c` (**not approved**), `transport_org_d` (no pets), `transport_org_e` (eligible alternate behind a closure) |
-| Destination orgs | `destination_org_a` / `dest_center_a` (step-free, pets OK), `destination_org_b` / `dest_library_b` (not step-free), `destination_org_c` / `dest_hotel_c` (no pets) |
-| Recovery | `recovery_org_demo` |
-| Alert presets | `ZONE_3_WARNING` (covers Maria), `ZONE_3_ORDER` (covers David), `ZONE_3_WARNING_AND_ORDER` |
-| Closures | official `Ridge Ave` (blocks the sector B ↔ zone 4 road), news report `Canyon Rd` (unverified) |
+| Residents / cases | `resident_001` / `case_maria_001` "Maria (synthetic)", es, `sim_phone_maria`, emergency contact `sim_phone_ana`, Zone 3 Sector B (**WARNING**), needs `[1,2,4,6]`, 1 dog. `resident_002` / `case_david_002` "David (synthetic)", en, `sim_phone_david`, caregiver/emergency contact `sim_phone_david_caregiver`, Zone 3 Sector A (**ORDER**), needs `[1]` |
+| Transport orgs | `eastside_rides_demo` (WILDFIRE; `volunteer_sarah`, wheelchair van, caters `[1,2,4,7]`, **the match**) · `neighbor_sedans_demo` (WILDFIRE; `volunteer_joe`, sedan, closer, caters `[4,7]`) · `red_cross_demo` (WILDFIRE/FLOOD/EARTHQUAKE; `volunteer_maya` minivan `[2,4,7,8]`, `volunteer_lee` wheelchair van `[1,2,4,5]`, the eligible alternate if Sarah declines) · `unlisted_vans_demo` (**org not approved**) · `flood_only_demo` (FLOOD only, never contacted for wildfire) |
+| Shelter org | `civic_shelter_demo` / site `dest_center_a` (features `[6,4,5,3]`, 12 beds); `red_cross_demo` / `rc_shelter_1` |
+| Recovery orgs | `recovery_housing_demo` (`TEMPORARY_HOUSING`), `red_cross_demo` (`TEMPORARY_HOUSING`, `INSURANCE_GUIDANCE`) |
+| Alert presets | `ZONE_3_WILDFIRE` (WARNING over Maria, ORDER over David, awareness incident point), `ZONE_3_WARNING`, `ZONE_3_ORDER` |
+| Closures | official `Ridge Ave` (blocks Sector B ↔ Zone 4), news report `Canyon Rd` (unverified) |
 
-Coordinates and polygons are fictional points in an LA-area-like grid, defined in `src/doorstep/demo/seed.py` once implemented. Shapely tests include a point exactly on a polygon edge.
+Coordinates and polygons are fictional, defined in `src/doorstep/demo/seed.py`. Tests include a resident point exactly on a polygon edge.
